@@ -186,3 +186,117 @@ def process_all(stock_file, matched_files, month):
         results[atelier_key] = process_atelier(atelier_key, stock_df, mov_file['path'], month)
     
     return results
+
+
+def process_all_with_overrides(stock_file, matched_files, month, overrides):
+    """Process all matched files for Fath1 with custom overrides"""
+    results = {}
+    
+    # Load stock once
+    try:
+        stock_df = load_stock(stock_file['path'])
+    except Exception as e:
+        return {'_error': f'Failed to load stock file: {str(e)}'}
+    
+    # Process each atelier with overrides
+    for atelier_key, mov_file in matched_files.items():
+        atelier_overrides = overrides.get(atelier_key, {}) if overrides else {}
+        results[atelier_key] = process_atelier_with_overrides(
+            atelier_key, stock_df, mov_file['path'], month, atelier_overrides
+        )
+    
+    return results
+
+
+def process_atelier_with_overrides(atelier_key, stock_df, mov_file_path, month, overrides):
+    """Process a single atelier with custom sheet/column overrides"""
+    
+    if atelier_key not in sheet_args:
+        return {'error': f'Unknown atelier: {atelier_key}', 'matches': [], 'discrepancies': []}
+    
+    args = sheet_args[atelier_key]
+    
+    # Apply overrides
+    sheet_name = overrides.get('sheetName') or args['sheet_name']
+    custom_ref_col = overrides.get('refCol')
+    custom_qty_col = overrides.get('qtyCol')
+    
+    try:
+        # Read Movement File - scan for header row containing a date column
+        temp_df = pd.read_excel(mov_file_path, sheet_name=sheet_name, header=None)
+        header_idx = 0
+        found_header = False
+        
+        for idx, row in temp_df.iterrows():
+            row_values = [str(val).strip() for val in row.values if pd.notna(val)]
+            if any(name in row_values for name in mov_possible_col_names['date']):
+                header_idx = idx
+                found_header = True
+                break
+        
+        if found_header:
+            mov = pd.read_excel(mov_file_path, sheet_name=sheet_name, header=header_idx)
+        else:
+            mov = pd.read_excel(mov_file_path, sheet_name=sheet_name)
+        
+        # Use custom columns or find automatically
+        ref_col = custom_ref_col
+        qty_col = custom_qty_col
+        
+        if not ref_col:
+            for name in mov_possible_col_names['ref']:
+                if name in mov.columns:
+                    ref_col = name
+                    break
+        
+        if not qty_col:
+            for name in mov_possible_col_names['quantity']:
+                if name in mov.columns:
+                    qty_col = name
+                    break
+        
+        if not ref_col or not qty_col:
+            return {
+                'error': f"Could not find ref or quantity columns. Available: {mov.columns.tolist()}",
+                'matches': [],
+                'discrepancies': []
+            }
+        
+        # Clean Movement Data
+        object_columns_mov = mov.select_dtypes(include=['object']).columns
+        for col in object_columns_mov:
+            mov[col] = mov[col].astype(str).str.strip()
+        
+        mov[ref_col] = mov[ref_col].astype('string')
+        mov[ref_col] = mov[ref_col].str.replace(r'(?<=\d)\.(?=\d)', ',', regex=True)
+        mov[qty_col] = pd.to_numeric(mov[qty_col], errors='coerce')
+        
+        # Group Movement
+        mov_agg = mov.groupby(ref_col)[qty_col].sum().reset_index()
+        mov_agg.rename(columns={ref_col: 'Ref', qty_col: 'Calc_Mov_Qty'}, inplace=True)
+        mov_agg['Calc_Mov_Qty'] = mov_agg['Calc_Mov_Qty'].round(2)
+        
+        # Filter Stock by localisation
+        localisations = args['localisation']
+        stock_filtered = stock_df[stock_df['LOCALISATION'].isin(localisations)].copy()
+        
+        # Group Stock
+        stock_agg = stock_filtered.groupby('REFERENCE')['QUANTITE'].sum().reset_index()
+        stock_agg.rename(columns={'REFERENCE': 'Ref', 'QUANTITE': 'Stock_Qty'}, inplace=True)
+        stock_agg['Stock_Qty'] = stock_agg['Stock_Qty'].round(2)
+        
+        # Comparison
+        comparison_df = pd.merge(stock_agg, mov_agg, on='Ref', how='outer').fillna(0)
+        comparison_df['Difference'] = comparison_df['Stock_Qty'] - comparison_df['Calc_Mov_Qty']
+        
+        # Results
+        discrepancies = comparison_df[comparison_df['Difference'] != 0].sort_values(by='Difference', ascending=False)
+        matches = comparison_df[comparison_df['Difference'] == 0]
+        
+        return {
+            'matches': matches.to_dict('records'),
+            'discrepancies': discrepancies.to_dict('records')
+        }
+        
+    except Exception as e:
+        return {'error': str(e), 'matches': [], 'discrepancies': []}

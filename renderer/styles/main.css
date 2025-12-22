@@ -1087,3 +1087,401 @@ body {
         flex-wrap: wrap;
     }
 }
+
+/* ============================================
+   Search Input
+   ============================================ */
+.search-input {
+    padding: var(--spacing-sm) var(--spacing-md);
+    border: 1px solid var(--gray-300);
+    border-radius: var(--radius-md);
+    font-size: 0.875rem;
+    min-width: 200px;
+    background: white;
+    transition: all var(--transition-fast);
+}
+
+.search-input:focus {
+    outline: none;
+    border-color: var(--primary-500);
+    box-shadow: 0 0 0 3px var(--primary-100);
+}
+
+.search-input::placeholder {
+    color: var(--gray-400);
+}
+
+.search-group {
+    flex: 1;
+    max-width: 300px;
+}
+
+.search-group .search-input {
+    width: 100%;
+}
+
+/* ============================================
+   Sortable Table Headers
+   ============================================ */
+.results-table th.sortable {
+    cursor: pointer;
+    user-select: none;
+    transition: background var(--transition-fast);
+    position: relative;
+}
+
+.results-table th.sortable:hover {
+    background: var(--gray-100);
+}
+
+.sort-icon {
+    font-size: 0.7rem;
+    opacity: 0.4;
+    margin-left: var(--spacing-xs);
+    display: inline-block;
+    transition: opacity var(--transition-fast);
+}
+
+.results-table th.sortable:hover .sort-icon {
+    opacity: 0.7;
+}
+
+.results-table th.sortable.asc .sort-icon,
+.results-table th.sortable.desc .sort-icon {
+    opacity: 1;
+    color: var(--primary-600);
+}
+
+.results-table th.sortable.asc .sort-icon {
+    transform: rotate(180deg);
+}
+
+.results-table th.sortable.desc .sort-icon {
+    transform: rotate(0deg);
+}
+
+/* ============================================
+   Modal Styles
+   ============================================ */
+.modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.modal.hidden {
+    display: none;
+}
+
+.modal-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(2px);
+}
+
+.modal-content {
+    position: relative;
+    background: white;
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-xl);
+    max-width: 800px;
+    width: 90%;
+    max-height: 85vh;
+    display: flex;
+    flex-direction: column;
+    animation: modalFadeIn var(--transition-normal);
+}
+
+@keyframes modalFadeIn {
+    from {
+        opacity: 0;
+        transform: scale(0.95) translateY(-20px);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1) translateY(0);
+    }
+}
+
+.verification-modal-content {
+    max-width: 900px;
+}
+
+.modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--spacing-lg);
+    border-bottom: 1px solid var(--gray-200);
+}
+
+.modal-header h2 {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: var(--gray-900);
+}
+
+.modal-close {
+    width: 32px;
+    height: 32px;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background var(--transition-fast);
+}
+
+.modal-close:hover {
+    background: var(--gray-100);
+}
+
+.modal-close svg {
+    width: 20px;
+    height: 20px;
+    stroke: var(--gray-500);
+}
+
+.modal-body {
+    padding: var(--spacing-lg);
+    overflow-y: auto;
+    flex: 1;
+}
+
+.modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--spacing-md);
+    padding: var(--spacing-lg);
+    border-top: 1px solid var(--gray-200);
+}
+
+/* ============================================
+   Verification Styles
+   ============================================ */
+.verification-status {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: var(--spacing-2xl);
+    text-align: center;
+}
+
+.verification-spinner {
+    width: 48px;
+    height: 48px;
+    border: 4px solid var(--primary-100);
+    border-top-color: var(--primary-600);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin-bottom: var(--spacing-md);
+}
+
+.verification-status p {
+    color: var(--gray-600);
+    font-size: 0.875rem;
+}
+
+.verification-results {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-md);
+}
+
+.verification-file {
+    background: var(--gray-50);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    border: 1px solid var(--gray-200);
+}
+
+.verification-file.has-errors {
+    border-color: var(--error-300);
+}
+
+.verification-file.valid {
+    border-color: var(--success-300);
+}
+
+.verification-file-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--spacing-md);
+    background: white;
+    border-bottom: 1px solid var(--gray-200);
+}
+
+.verification-file-header .file-info {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+}
+
+.verification-file-header .file-info svg {
+    width: 20px;
+    height: 20px;
+}
+
+.verification-file.has-errors .file-info svg {
+    stroke: var(--error-500);
+}
+
+.verification-file.valid .file-info svg {
+    stroke: var(--success-500);
+}
+
+.verification-file-header .file-name {
+    font-weight: 500;
+    color: var(--gray-800);
+}
+
+.verification-file-header .atelier-name {
+    font-size: 0.75rem;
+    color: var(--gray-500);
+    margin-left: var(--spacing-sm);
+}
+
+.verification-file-header .status-indicator {
+    font-size: 0.75rem;
+    font-weight: 500;
+    padding: var(--spacing-xs) var(--spacing-sm);
+    border-radius: var(--radius-sm);
+}
+
+.verification-file.has-errors .status-indicator {
+    background: var(--error-50);
+    color: var(--error-600);
+}
+
+.verification-file.valid .status-indicator {
+    background: var(--success-50);
+    color: var(--success-600);
+}
+
+.verification-file-body {
+    padding: var(--spacing-md);
+}
+
+.verification-field {
+    display: grid;
+    grid-template-columns: 140px 1fr auto;
+    align-items: center;
+    gap: var(--spacing-md);
+    padding: var(--spacing-sm) 0;
+    border-bottom: 1px solid var(--gray-100);
+}
+
+.verification-field:last-child {
+    border-bottom: none;
+}
+
+.verification-field label {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--gray-700);
+}
+
+.verification-field input,
+.verification-field select {
+    padding: var(--spacing-sm) var(--spacing-md);
+    border: 1px solid var(--gray-300);
+    border-radius: var(--radius-md);
+    font-size: 0.875rem;
+    background: white;
+}
+
+.verification-field input:focus,
+.verification-field select:focus {
+    outline: none;
+    border-color: var(--primary-500);
+    box-shadow: 0 0 0 3px var(--primary-100);
+}
+
+.verification-field input.error,
+.verification-field select.error {
+    border-color: var(--error-500);
+    background: var(--error-50);
+}
+
+.verification-field .field-status {
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.verification-field .field-status svg {
+    width: 18px;
+    height: 18px;
+}
+
+.verification-field .field-status.valid svg {
+    stroke: var(--success-500);
+}
+
+.verification-field .field-status.error svg {
+    stroke: var(--error-500);
+}
+
+.available-options {
+    font-size: 0.75rem;
+    color: var(--gray-500);
+    margin-top: var(--spacing-xs);
+    grid-column: 2;
+}
+
+.all-valid-message {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: var(--spacing-2xl);
+    text-align: center;
+}
+
+.all-valid-message svg {
+    width: 64px;
+    height: 64px;
+    stroke: var(--success-500);
+    margin-bottom: var(--spacing-md);
+}
+
+.all-valid-message h3 {
+    color: var(--success-600);
+    font-size: 1.25rem;
+    margin-bottom: var(--spacing-sm);
+}
+
+.all-valid-message p {
+    color: var(--gray-500);
+}
+
+/* ============================================
+   Results Filter Responsive
+   ============================================ */
+.results-filter {
+    flex-wrap: wrap;
+}
+
+.results-filter .btn {
+    margin-left: 0;
+}
+
+@media (min-width: 1200px) {
+    .results-filter .btn:first-of-type {
+        margin-left: auto;
+    }
+}

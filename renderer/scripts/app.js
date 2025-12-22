@@ -15,7 +15,12 @@ const AppState = {
     unmatchedFiles: [],    // [{ path, filename }]
     ateliers: [],          // List of ateliers for selected unit
     skippedAteliers: new Set(),
-    results: null          // Processing results
+    results: null,         // Processing results
+    verificationResults: null, // Verification results
+    fileOverrides: {},     // { atelier: { sheetName, refCol, qtyCol } }
+    currentSortColumn: null,
+    currentSortDirection: 'asc',
+    searchQuery: ''
 };
 
 // Unit configurations with keywords
@@ -95,6 +100,7 @@ const elements = {
     matchedCount: document.getElementById('matched-count'),
     unmatchedCount: document.getElementById('unmatched-count'),
     btnClearFiles: document.getElementById('btn-clear-files'),
+    btnVerify: document.getElementById('btn-verify'),
     btnProcess: document.getElementById('btn-process'),
     // Processing
     processingStatus: document.getElementById('processing-status'),
@@ -106,8 +112,17 @@ const elements = {
     atelierSelect: document.getElementById('atelier-select'),
     toggleBtns: document.querySelectorAll('.toggle-btn'),
     btnExport: document.getElementById('btn-export'),
+    btnExportExcel: document.getElementById('btn-export-excel'),
+    resultsSearch: document.getElementById('results-search'),
     resultsTbody: document.getElementById('results-tbody'),
-    btnNewProcess: document.getElementById('btn-new-process')
+    btnNewProcess: document.getElementById('btn-new-process'),
+    // Verification Modal
+    verificationModal: document.getElementById('verification-modal'),
+    closeVerificationModal: document.getElementById('close-verification-modal'),
+    verificationStatus: document.getElementById('verification-status'),
+    verificationResults: document.getElementById('verification-results'),
+    btnCancelVerification: document.getElementById('btn-cancel-verification'),
+    btnApplyFixes: document.getElementById('btn-apply-fixes')
 };
 
 // ============================================
@@ -523,6 +538,7 @@ function validateProcessButton() {
     const hasAtLeastOneFile = Object.keys(AppState.matchedFiles).length > 0;
     
     elements.btnProcess.disabled = !(hasStock && hasAtLeastOneFile);
+    elements.btnVerify.disabled = !(hasStock && hasAtLeastOneFile);
 }
 
 // ============================================
@@ -564,6 +580,190 @@ async function handleAtelierAction(atelier, action) {
 }
 
 // ============================================
+// File Verification
+// ============================================
+async function verifyFiles() {
+    // Show modal
+    elements.verificationModal.classList.remove('hidden');
+    elements.verificationStatus.classList.remove('hidden');
+    elements.verificationResults.classList.add('hidden');
+    elements.btnApplyFixes.disabled = true;
+    
+    try {
+        // Prepare matched files (exclude skipped)
+        const filesToVerify = {};
+        for (const [atelier, file] of Object.entries(AppState.matchedFiles)) {
+            if (!AppState.skippedAteliers.has(atelier)) {
+                filesToVerify[atelier] = file;
+            }
+        }
+        
+        // Call Python verifier
+        const result = await window.electronAPI.verifyFiles(
+            AppState.selectedUnit,
+            filesToVerify
+        );
+        
+        if (result && result.success && result.verification) {
+            AppState.verificationResults = result.verification;
+            renderVerificationResults(result.verification);
+        } else {
+            throw new Error(result?.error || 'Verification failed');
+        }
+        
+    } catch (error) {
+        showToast(`Verification error: ${error}`, 'error');
+        closeVerificationModal();
+    }
+}
+
+function renderVerificationResults(verification) {
+    elements.verificationStatus.classList.add('hidden');
+    elements.verificationResults.classList.remove('hidden');
+    
+    const container = elements.verificationResults;
+    container.innerHTML = '';
+    
+    const ateliers = Object.keys(verification);
+    let hasErrors = false;
+    
+    // Check if all files are valid
+    const allValid = ateliers.every(atelier => verification[atelier].valid);
+    
+    if (allValid) {
+        container.innerHTML = `
+            <div class="all-valid-message">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                    <polyline points="22,4 12,14.01 9,11.01"/>
+                </svg>
+                <h3>All Files Verified Successfully!</h3>
+                <p>All sheet names and column configurations are correct. You can proceed with processing.</p>
+            </div>
+        `;
+        elements.btnApplyFixes.disabled = false;
+        elements.btnApplyFixes.textContent = 'Continue to Process';
+        return;
+    }
+    
+    elements.btnApplyFixes.textContent = 'Apply & Continue';
+    
+    ateliers.forEach(atelier => {
+        const data = verification[atelier];
+        const fileDiv = document.createElement('div');
+        fileDiv.className = `verification-file ${data.valid ? 'valid' : 'has-errors'}`;
+        fileDiv.dataset.atelier = atelier;
+        
+        const statusIcon = data.valid 
+            ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22,4 12,14.01 9,11.01"/></svg>'
+            : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>';
+        
+        fileDiv.innerHTML = `
+            <div class="verification-file-header">
+                <div class="file-info">
+                    ${statusIcon}
+                    <span class="file-name">${data.filename}</span>
+                    <span class="atelier-name">(${atelier})</span>
+                </div>
+                <span class="status-indicator">${data.valid ? 'Valid' : data.errors.length + ' Issue(s)'}</span>
+            </div>
+            <div class="verification-file-body">
+                <div class="verification-field">
+                    <label>Sheet Name:</label>
+                    <select class="sheet-select" data-atelier="${atelier}">
+                        ${data.availableSheets.map(sheet => 
+                            `<option value="${sheet}" ${sheet === data.expectedSheet ? 'selected' : ''}>${sheet}</option>`
+                        ).join('')}
+                    </select>
+                    <div class="field-status ${data.availableSheets.includes(data.expectedSheet) ? 'valid' : 'error'}">
+                        ${data.availableSheets.includes(data.expectedSheet) 
+                            ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20,6 9,17 4,12"/></svg>'
+                            : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>'}
+                    </div>
+                </div>
+                ${!data.availableSheets.includes(data.expectedSheet) ? `
+                    <div class="available-options">Expected: "${data.expectedSheet}"</div>
+                ` : ''}
+                
+                <div class="verification-field">
+                    <label>Reference Column:</label>
+                    <select class="ref-col-select" data-atelier="${atelier}">
+                        <option value="">-- Select Column --</option>
+                        ${data.availableColumns.map(col => 
+                            `<option value="${col}" ${col === data.detectedRefCol ? 'selected' : ''}>${col}</option>`
+                        ).join('')}
+                    </select>
+                    <div class="field-status ${data.detectedRefCol ? 'valid' : 'error'}">
+                        ${data.detectedRefCol 
+                            ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20,6 9,17 4,12"/></svg>'
+                            : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>'}
+                    </div>
+                </div>
+                
+                <div class="verification-field">
+                    <label>Quantity Column:</label>
+                    <select class="qty-col-select" data-atelier="${atelier}">
+                        <option value="">-- Select Column --</option>
+                        ${data.availableColumns.map(col => 
+                            `<option value="${col}" ${col === data.detectedQtyCol ? 'selected' : ''}>${col}</option>`
+                        ).join('')}
+                    </select>
+                    <div class="field-status ${data.detectedQtyCol ? 'valid' : 'error'}">
+                        ${data.detectedQtyCol 
+                            ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20,6 9,17 4,12"/></svg>'
+                            : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>'}
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        container.appendChild(fileDiv);
+        
+        if (!data.valid) hasErrors = true;
+    });
+    
+    // Enable apply button - user can apply fixes
+    elements.btnApplyFixes.disabled = false;
+    
+    // Add change listeners to update overrides
+    container.querySelectorAll('select').forEach(select => {
+        select.addEventListener('change', updateOverridesFromUI);
+    });
+}
+
+function updateOverridesFromUI() {
+    const container = elements.verificationResults;
+    
+    container.querySelectorAll('.verification-file').forEach(fileDiv => {
+        const atelier = fileDiv.dataset.atelier;
+        const sheetSelect = fileDiv.querySelector('.sheet-select');
+        const refColSelect = fileDiv.querySelector('.ref-col-select');
+        const qtyColSelect = fileDiv.querySelector('.qty-col-select');
+        
+        AppState.fileOverrides[atelier] = {
+            sheetName: sheetSelect?.value || '',
+            refCol: refColSelect?.value || '',
+            qtyCol: qtyColSelect?.value || ''
+        };
+    });
+}
+
+function applyFixesAndProcess() {
+    // Collect all overrides from the UI
+    updateOverridesFromUI();
+    
+    // Close modal
+    closeVerificationModal();
+    
+    // Start processing with overrides
+    processFiles();
+}
+
+function closeVerificationModal() {
+    elements.verificationModal.classList.add('hidden');
+}
+
+// ============================================
 // File Processing
 // ============================================
 async function processFiles() {
@@ -580,12 +780,16 @@ async function processFiles() {
         
         updateProgress(10, 'Loading files...');
         
+        // Prepare overrides if any
+        const overrides = Object.keys(AppState.fileOverrides).length > 0 ? AppState.fileOverrides : null;
+        
         // Call Python processor
         const result = await window.electronAPI.processFiles(
             AppState.selectedUnit,
             AppState.stockFile,
             filesToProcess,
-            AppState.selectedMonth
+            AppState.selectedMonth,
+            overrides
         );
         
         updateProgress(100, 'Complete!');
@@ -700,12 +904,45 @@ function renderResultsTable() {
         return;
     }
     
-    const data = atelierData[viewType] || [];
+    let data = [...(atelierData[viewType] || [])];
+    
+    // Apply search filter
+    if (AppState.searchQuery) {
+        const query = AppState.searchQuery.toLowerCase();
+        data = data.filter(row => {
+            const ref = (row.Ref || '').toString().toLowerCase();
+            return ref.includes(query);
+        });
+    }
+    
+    // Apply sorting
+    if (AppState.currentSortColumn) {
+        data.sort((a, b) => {
+            let aVal = a[AppState.currentSortColumn];
+            let bVal = b[AppState.currentSortColumn];
+            
+            // Handle numeric values
+            if (typeof aVal === 'number' || typeof bVal === 'number') {
+                aVal = parseFloat(aVal) || 0;
+                bVal = parseFloat(bVal) || 0;
+            } else {
+                aVal = (aVal || '').toString().toLowerCase();
+                bVal = (bVal || '').toString().toLowerCase();
+            }
+            
+            if (aVal < bVal) return AppState.currentSortDirection === 'asc' ? -1 : 1;
+            if (aVal > bVal) return AppState.currentSortDirection === 'asc' ? 1 : -1;
+            return 0;
+        });
+    }
     
     if (data.length === 0) {
+        const message = AppState.searchQuery 
+            ? `No results matching "${AppState.searchQuery}"` 
+            : `No ${viewType} found for this atelier`;
         elements.resultsTbody.innerHTML = `
             <tr class="empty-row">
-                <td colspan="4">No ${viewType} found for this atelier</td>
+                <td colspan="4">${message}</td>
             </tr>
         `;
         return;
@@ -714,15 +951,49 @@ function renderResultsTable() {
     elements.resultsTbody.innerHTML = data.map(row => {
         const diff = parseFloat(row.Difference) || 0;
         const rowClass = diff > 0 ? 'positive' : diff < 0 ? 'negative' : '';
+        const refHighlight = AppState.searchQuery ? highlightMatch(row.Ref || '', AppState.searchQuery) : (row.Ref || '');
         return `
             <tr class="${rowClass}">
-                <td>${row.Ref || ''}</td>
+                <td>${refHighlight}</td>
                 <td>${formatNumber(row.Stock_Qty)}</td>
                 <td>${formatNumber(row.Calc_Mov_Qty)}</td>
                 <td>${formatNumber(row.Difference)}</td>
             </tr>
         `;
     }).join('');
+    
+    // Update sort indicators
+    updateSortIndicators();
+}
+
+function highlightMatch(text, query) {
+    if (!query) return text;
+    const regex = new RegExp(`(${escapeRegex(query)})`, 'gi');
+    return text.toString().replace(regex, '<mark style="background: var(--warning-200); padding: 0 2px; border-radius: 2px;">$1</mark>');
+}
+
+function escapeRegex(string) {
+    return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function handleSort(column) {
+    if (AppState.currentSortColumn === column) {
+        // Toggle direction
+        AppState.currentSortDirection = AppState.currentSortDirection === 'asc' ? 'desc' : 'asc';
+    } else {
+        AppState.currentSortColumn = column;
+        AppState.currentSortDirection = 'asc';
+    }
+    renderResultsTable();
+}
+
+function updateSortIndicators() {
+    document.querySelectorAll('.results-table th.sortable').forEach(th => {
+        th.classList.remove('asc', 'desc');
+        if (th.dataset.column === AppState.currentSortColumn) {
+            th.classList.add(AppState.currentSortDirection);
+        }
+    });
 }
 
 function formatNumber(val) {
@@ -763,6 +1034,35 @@ async function exportResults() {
     }
 }
 
+async function exportResultsExcel() {
+    const atelier = elements.atelierSelect.value;
+    const viewType = document.querySelector('.toggle-btn.active').dataset.view;
+    
+    if (!atelier || !AppState.results || !AppState.results[atelier]) {
+        showToast('Please select an atelier first', 'warning');
+        return;
+    }
+    
+    const data = AppState.results[atelier][viewType] || [];
+    
+    if (data.length === 0) {
+        showToast('No data to export', 'warning');
+        return;
+    }
+    
+    const defaultName = `${viewType}_${atelier.replace(/\s+/g, '_')}.xlsx`;
+    const filePath = await window.electronAPI.saveExcelDialog(defaultName);
+    
+    if (filePath) {
+        try {
+            await window.electronAPI.exportExcel(data, filePath);
+            showToast('Excel export successful!', 'success');
+        } catch (error) {
+            showToast(`Excel export failed: ${error}`, 'error');
+        }
+    }
+}
+
 // ============================================
 // Reset State
 // ============================================
@@ -773,9 +1073,17 @@ function resetFileState() {
     AppState.unmatchedFiles = [];
     AppState.skippedAteliers.clear();
     AppState.results = null;
+    AppState.verificationResults = null;
+    AppState.fileOverrides = {};
+    AppState.currentSortColumn = null;
+    AppState.currentSortDirection = 'asc';
+    AppState.searchQuery = '';
     
     updateStockFileDisplay();
     elements.fileInput.value = '';
+    if (elements.resultsSearch) {
+        elements.resultsSearch.value = '';
+    }
 }
 
 // ============================================
@@ -812,20 +1120,54 @@ function initEventListeners() {
         updateUI();
     });
     
+    elements.btnVerify.addEventListener('click', verifyFiles);
     elements.btnProcess.addEventListener('click', processFiles);
     
+    // Verification modal
+    elements.closeVerificationModal.addEventListener('click', closeVerificationModal);
+    elements.btnCancelVerification.addEventListener('click', closeVerificationModal);
+    elements.btnApplyFixes.addEventListener('click', applyFixesAndProcess);
+    elements.verificationModal.querySelector('.modal-overlay').addEventListener('click', closeVerificationModal);
+    
     // Results
-    elements.atelierSelect.addEventListener('change', renderResultsTable);
+    elements.atelierSelect.addEventListener('change', () => {
+        AppState.searchQuery = '';
+        AppState.currentSortColumn = null;
+        if (elements.resultsSearch) elements.resultsSearch.value = '';
+        renderResultsTable();
+    });
     
     elements.toggleBtns.forEach(btn => {
         btn.addEventListener('click', () => {
             elements.toggleBtns.forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
+            AppState.searchQuery = '';
+            AppState.currentSortColumn = null;
+            if (elements.resultsSearch) elements.resultsSearch.value = '';
             renderResultsTable();
         });
     });
     
+    // Search
+    if (elements.resultsSearch) {
+        elements.resultsSearch.addEventListener('input', (e) => {
+            AppState.searchQuery = e.target.value;
+            renderResultsTable();
+        });
+    }
+    
+    // Sortable headers
+    document.querySelectorAll('.results-table th.sortable').forEach(th => {
+        th.addEventListener('click', () => {
+            handleSort(th.dataset.column);
+        });
+    });
+    
     elements.btnExport.addEventListener('click', exportResults);
+    
+    if (elements.btnExportExcel) {
+        elements.btnExportExcel.addEventListener('click', exportResultsExcel);
+    }
     
     elements.btnNewProcess.addEventListener('click', () => {
         resetFileState();

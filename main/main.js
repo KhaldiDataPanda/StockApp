@@ -79,6 +79,17 @@ ipcMain.handle('save-file-dialog', async (event, defaultName) => {
     return result.filePath;
 });
 
+// Save Excel file dialog
+ipcMain.handle('save-excel-dialog', async (event, defaultName) => {
+    const result = await dialog.showSaveDialog(mainWindow, {
+        defaultPath: defaultName,
+        filters: [
+            { name: 'Excel Files', extensions: ['xlsx'] }
+        ]
+    });
+    return result.filePath;
+});
+
 // Run Python processor
 ipcMain.handle('run-python', async (event, { script, args }) => {
     return new Promise((resolve, reject) => {
@@ -122,7 +133,7 @@ ipcMain.handle('match-files', async (event, { unit, files }) => {
 });
 
 // Process files and calculate
-ipcMain.handle('process-files', async (event, { unit, stockFile, matchedFiles, month }) => {
+ipcMain.handle('process-files', async (event, { unit, stockFile, matchedFiles, month, overrides }) => {
     return new Promise((resolve, reject) => {
         const options = {
             mode: 'json',
@@ -134,7 +145,8 @@ ipcMain.handle('process-files', async (event, { unit, stockFile, matchedFiles, m
                 unit, 
                 stockFile, 
                 matchedFiles,
-                month 
+                month,
+                overrides
             })]
         };
 
@@ -197,5 +209,93 @@ ipcMain.handle('export-csv', async (event, { data, filePath }) => {
         } catch (err) {
             reject(err.message);
         }
+    });
+});
+
+// Verify files
+ipcMain.handle('verify-files', async (event, { unit, matchedFiles }) => {
+    return new Promise((resolve, reject) => {
+        const options = {
+            mode: 'json',
+            pythonPath: process.platform === 'win32' ? 'python' : 'python3',
+            pythonOptions: ['-u'],
+            scriptPath: path.join(__dirname, '../backend'),
+            args: [JSON.stringify({ 
+                action: 'verify', 
+                unit, 
+                matchedFiles
+            })]
+        };
+
+        console.log('Verifying files for unit:', unit);
+
+        const pyshell = new PythonShell('processor.py', options);
+        let results = [];
+        
+        pyshell.on('message', function (message) {
+            console.log('Python verify output:', message);
+            results.push(message);
+        });
+        
+        pyshell.on('stderr', function (stderr) {
+            console.log('Python stderr (debug):', stderr);
+        });
+        
+        pyshell.end(function (err, code, signal) {
+            if (err) {
+                console.error('Python error:', err);
+                reject(err.message);
+            } else {
+                console.log('Python verify finished with code:', code);
+                if (results.length > 0) {
+                    resolve(results[results.length - 1]);
+                } else {
+                    resolve({});
+                }
+            }
+        });
+    });
+});
+
+// Export to Excel
+ipcMain.handle('export-excel', async (event, { data, filePath }) => {
+    return new Promise((resolve, reject) => {
+        const options = {
+            mode: 'json',
+            pythonPath: process.platform === 'win32' ? 'python' : 'python3',
+            pythonOptions: ['-u'],
+            scriptPath: path.join(__dirname, '../backend'),
+            args: [JSON.stringify({ 
+                action: 'export_excel', 
+                data, 
+                outputPath: filePath
+            })]
+        };
+
+        console.log('Exporting to Excel:', filePath);
+
+        const pyshell = new PythonShell('processor.py', options);
+        let results = [];
+        
+        pyshell.on('message', function (message) {
+            results.push(message);
+        });
+        
+        pyshell.on('stderr', function (stderr) {
+            console.log('Python stderr:', stderr);
+        });
+        
+        pyshell.end(function (err, code, signal) {
+            if (err) {
+                console.error('Python error:', err);
+                reject(err.message);
+            } else {
+                if (results.length > 0 && results[results.length - 1].success) {
+                    resolve(true);
+                } else {
+                    reject('Export failed');
+                }
+            }
+        });
     });
 });

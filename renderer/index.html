@@ -197,6 +197,13 @@
                         </svg>
                         Clear All
                     </button>
+                    <button class="btn btn-secondary" id="btn-verify" disabled>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M9 12l2 2 4-4"/>
+                            <path d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"/>
+                        </svg>
+                        Verify Files
+                    </button>
                     <button class="btn btn-primary" id="btn-process" disabled>
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
@@ -290,6 +297,10 @@
                             <button class="toggle-btn" data-view="discrepancies">Discrepancies</button>
                         </div>
                     </div>
+                    <div class="filter-group search-group">
+                        <label>Search:</label>
+                        <input type="text" id="results-search" placeholder="Search by reference..." class="search-input">
+                    </div>
                     <button class="btn btn-secondary" id="btn-export">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
@@ -298,6 +309,14 @@
                         </svg>
                         Export CSV
                     </button>
+                    <button class="btn btn-secondary" id="btn-export-excel">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                            <polyline points="14,2 14,8 20,8"/>
+                            <path d="M8 13h2l2 3 2-3h2"/>
+                        </svg>
+                        Export Excel
+                    </button>
                 </div>
 
                 <!-- Results Table -->
@@ -305,10 +324,10 @@
                     <table class="results-table" id="results-table">
                         <thead>
                             <tr>
-                                <th>Reference</th>
-                                <th>Stock Qty</th>
-                                <th>Movement Qty</th>
-                                <th>Difference</th>
+                                <th class="sortable" data-column="Ref">Reference <span class="sort-icon">▼</span></th>
+                                <th class="sortable" data-column="Stock_Qty">Stock Qty <span class="sort-icon">▼</span></th>
+                                <th class="sortable" data-column="Calc_Mov_Qty">Movement Qty <span class="sort-icon">▼</span></th>
+                                <th class="sortable" data-column="Difference">Difference <span class="sort-icon">▼</span></th>
                             </tr>
                         </thead>
                         <tbody id="results-tbody">
@@ -335,6 +354,33 @@
 
     <!-- Toast Notifications -->
     <div id="toast-container"></div>
+
+    <!-- Verification Modal -->
+    <div id="verification-modal" class="modal hidden">
+        <div class="modal-overlay"></div>
+        <div class="modal-content verification-modal-content">
+            <div class="modal-header">
+                <h2>File Verification</h2>
+                <button class="modal-close" id="close-verification-modal">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"/>
+                        <line x1="6" y1="6" x2="18" y2="18"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div id="verification-status" class="verification-status">
+                    <div class="verification-spinner"></div>
+                    <p>Verifying files...</p>
+                </div>
+                <div id="verification-results" class="verification-results hidden"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="btn-cancel-verification">Cancel</button>
+                <button class="btn btn-primary" id="btn-apply-fixes" disabled>Apply & Continue</button>
+            </div>
+        </div>
+    </div>
 
     <script src="scripts/app.js"></script>
 </body>
