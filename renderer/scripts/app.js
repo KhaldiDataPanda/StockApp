@@ -10,6 +10,7 @@ const AppState = {
     selectedUnit: null,
     selectedMonth: '12',
     stockFile: null,
+    prevStockFile: null,
     droppedFiles: [],
     matchedFiles: {},      // { atelier: { path, filename } }
     unmatchedFiles: [],    // [{ path, filename }]
@@ -68,6 +69,18 @@ const UnitConfigs = {
             'drafter', 'extredeuse', 'filiére', 'carding',
             'magaisain pet', 'magaisain fibre', 'magaisain commercial'
         ]
+    },
+    Fath3: {
+        name: 'Fath 3',
+        ateliers: ['pet', 'triage']
+    },
+    Mdoukal: {
+        name: "M'doukal",
+        ateliers: ['couture femmes', 'orielles', 'magasin']
+    },
+    Mags: {
+        name: 'Mags',
+        ateliers: ['magz']
     }
 };
 
@@ -232,7 +245,11 @@ function handleFiles(files) {
         
         // Check if it's a stock file
         if (isStockFile(file.name)) {
-            AppState.stockFile = fileInfo;
+            if (AppState.selectedUnit === 'Mags') {
+                assignMagsStockFile(fileInfo);
+            } else {
+                AppState.stockFile = fileInfo;
+            }
             updateStockFileDisplay();
         } else {
             // Add to dropped files if not already present
@@ -250,6 +267,50 @@ function handleFiles(files) {
 function isStockFile(filename) {
     const lower = filename.toLowerCase();
     return lower.includes('stock') && !lower.includes('mov');
+}
+
+function parseStockMonthYear(filename) {
+    const match = filename.match(/stock\s*(\d{1,2})\s*[-_\s]\s*(\d{4})/i);
+    if (!match) return null;
+    const monthNum = parseInt(match[1], 10);
+    const yearNum = parseInt(match[2], 10);
+    if (!monthNum || monthNum < 1 || monthNum > 12 || !yearNum) return null;
+    return {
+        month: String(monthNum).padStart(2, '0'),
+        year: yearNum
+    };
+}
+
+function prevMonthFrom(monthStr) {
+    const m = parseInt(monthStr, 10);
+    if (!m || m < 1 || m > 12) return null;
+    return m === 1 ? '12' : String(m - 1).padStart(2, '0');
+}
+
+function assignMagsStockFile(fileInfo) {
+    const meta = parseStockMonthYear(fileInfo.filename);
+    const selectedMonth = AppState.selectedMonth;
+    const prevMonth = prevMonthFrom(selectedMonth);
+
+    // Best effort assignment based on filename month
+    if (meta && meta.month === selectedMonth) {
+        AppState.stockFile = fileInfo;
+        return;
+    }
+    if (meta && prevMonth && meta.month === prevMonth) {
+        AppState.prevStockFile = fileInfo;
+        return;
+    }
+
+    // Fallback: fill current first, then previous
+    if (!AppState.stockFile || AppState.stockFile.path === fileInfo.path) {
+        AppState.stockFile = fileInfo;
+        return;
+    }
+    if (!AppState.prevStockFile || AppState.prevStockFile.path === fileInfo.path) {
+        AppState.prevStockFile = fileInfo;
+        return;
+    }
 }
 
 function matchFilesToAteliers() {
@@ -457,6 +518,103 @@ function renderUnmatchedFiles() {
 
 function updateStockFileDisplay() {
     const container = elements.stockFileDisplay;
+
+    if (AppState.selectedUnit === 'Mags') {
+        const current = AppState.stockFile;
+        const prev = AppState.prevStockFile;
+
+        container.innerHTML = `
+            <div style="display: flex; gap: 12px; align-items: flex-start;">
+                <div style="flex: 1; min-width: 260px;">
+                    <div style="font-size: 12px; color: var(--gray-600); margin-bottom: 6px;">Current month stock</div>
+                    ${current ? `
+                        <div class="file-item" style="background: var(--success-50); cursor: pointer;">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                                <polyline points="22,4 12,14.01 9,11.01"/>
+                            </svg>
+                            <span>${current.filename}</span>
+                            <button class="btn-icon remove" title="Change current stock file" id="btn-change-stock">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                                    <polyline points="17,8 12,3 7,8"/>
+                                    <line x1="12" y1="3" x2="12" y2="15"/>
+                                </svg>
+                            </button>
+                        </div>
+                    ` : `
+                        <div class="stock-upload-zone" id="stock-upload-zone">
+                            <p style="margin: 0; font-weight: 500;">Click to load current Stock file</p>
+                            <p class="placeholder-text" style="margin: 4px 0 0 0;">Or drop it in the main drop zone</p>
+                        </div>
+                    `}
+                </div>
+
+                <div style="flex: 1; min-width: 260px;">
+                    <div style="font-size: 12px; color: var(--gray-600); margin-bottom: 6px;">Previous month stock (opening inventory)</div>
+                    ${prev ? `
+                        <div class="file-item" style="background: var(--success-50); cursor: pointer;">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                                <polyline points="22,4 12,14.01 9,11.01"/>
+                            </svg>
+                            <span>${prev.filename}</span>
+                            <button class="btn-icon remove" title="Change previous stock file" id="btn-change-prev-stock">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                                    <polyline points="17,8 12,3 7,8"/>
+                                    <line x1="12" y1="3" x2="12" y2="15"/>
+                                </svg>
+                            </button>
+                        </div>
+                    ` : `
+                        <div class="stock-upload-zone" id="prev-stock-upload-zone">
+                            <p style="margin: 0; font-weight: 500;">Click to load previous Stock file</p>
+                            <p class="placeholder-text" style="margin: 4px 0 0 0;">Or drop it in the main drop zone</p>
+                        </div>
+                    `}
+                </div>
+            </div>
+        `;
+
+        const hasCurrent = !!AppState.stockFile;
+        if (hasCurrent) {
+            elements.stockStatus.textContent = 'Loaded';
+            elements.stockStatus.className = 'status-badge success';
+        } else {
+            elements.stockStatus.textContent = 'Not Loaded';
+            elements.stockStatus.className = 'status-badge warning';
+        }
+
+        // Wire buttons/zones
+        const btnChangeCurrent = document.getElementById('btn-change-stock');
+        if (btnChangeCurrent) {
+            btnChangeCurrent.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                await loadStockFileManually();
+            });
+        }
+
+        const btnChangePrev = document.getElementById('btn-change-prev-stock');
+        if (btnChangePrev) {
+            btnChangePrev.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                await loadPrevStockFileManually();
+            });
+        }
+
+        const currentZone = document.getElementById('stock-upload-zone');
+        if (currentZone) {
+            currentZone.addEventListener('click', loadStockFileManually);
+        }
+
+        const prevZone = document.getElementById('prev-stock-upload-zone');
+        if (prevZone) {
+            prevZone.addEventListener('click', loadPrevStockFileManually);
+        }
+
+        return;
+    }
     
     if (AppState.stockFile) {
         container.innerHTML = `
@@ -507,13 +665,32 @@ async function loadStockFileManually() {
     const files = await window.electronAPI.openFileDialog({ multiple: false });
     if (files && files.length > 0) {
         const filename = files[0].split(/[/\\]/).pop();
-        AppState.stockFile = {
+        const fileInfo = {
+            path: files[0],
+            filename: filename
+        };
+        if (AppState.selectedUnit === 'Mags') {
+            AppState.stockFile = fileInfo;
+        } else {
+            AppState.stockFile = fileInfo;
+        }
+        updateStockFileDisplay();
+        validateProcessButton();
+        showToast('Stock file loaded successfully', 'success');
+    }
+}
+
+async function loadPrevStockFileManually() {
+    const files = await window.electronAPI.openFileDialog({ multiple: false });
+    if (files && files.length > 0) {
+        const filename = files[0].split(/[/\\]/).pop();
+        AppState.prevStockFile = {
             path: files[0],
             filename: filename
         };
         updateStockFileDisplay();
         validateProcessButton();
-        showToast('Stock file loaded successfully', 'success');
+        showToast('Previous stock file loaded successfully', 'success');
     }
 }
 
@@ -534,7 +711,7 @@ function updateCounts() {
 
 function validateProcessButton() {
     // At least stock file and 1 movement file required
-    const hasStock = AppState.stockFile !== null;
+    let hasStock = AppState.stockFile !== null;
     const hasAtLeastOneFile = Object.keys(AppState.matchedFiles).length > 0;
     
     elements.btnProcess.disabled = !(hasStock && hasAtLeastOneFile);
@@ -784,9 +961,17 @@ async function processFiles() {
         const overrides = Object.keys(AppState.fileOverrides).length > 0 ? AppState.fileOverrides : null;
         
         // Call Python processor
+        const stockPayload = (AppState.selectedUnit === 'Mags' && AppState.stockFile)
+            ? {
+                ...AppState.stockFile,
+                prevPath: AppState.prevStockFile?.path,
+                prevFilename: AppState.prevStockFile?.filename
+            }
+            : AppState.stockFile;
+
         const result = await window.electronAPI.processFiles(
             AppState.selectedUnit,
-            AppState.stockFile,
+            stockPayload,
             filesToProcess,
             AppState.selectedMonth,
             overrides
@@ -1068,6 +1253,7 @@ async function exportResultsExcel() {
 // ============================================
 function resetFileState() {
     AppState.stockFile = null;
+    AppState.prevStockFile = null;
     AppState.droppedFiles = [];
     AppState.matchedFiles = {};
     AppState.unmatchedFiles = [];

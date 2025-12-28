@@ -29,6 +29,9 @@ UNIT_MODULES = {
     'Larbaa': 'processor_larbaa',
     'Oran': 'processor_oran',
     'Fibre': 'processor_fibre',
+    'Fath3': 'processor_fath3',
+    'Mdoukal': 'processor_mdoukal',
+    'Mags': 'processor_mags',
 }
 
 
@@ -73,6 +76,7 @@ def get_mov_col_names(unit):
 def match_files_to_ateliers(unit, files):
     """Match uploaded files to ateliers based on keywords"""
     ateliers = get_ateliers(unit)
+    sheet_args = get_sheet_args(unit)
     
     matched = {}
     unmatched_files = []
@@ -82,7 +86,8 @@ def match_files_to_ateliers(unit, files):
         found_match = False
         
         for atelier in ateliers:
-            keyword = atelier.lower()
+            # Allow units to specify a dedicated keyword for file matching
+            keyword = str(sheet_args.get(atelier, {}).get('file_keyword', atelier)).lower()
             if keyword in filename:
                 if atelier not in matched:
                     matched[atelier] = file_info
@@ -140,14 +145,26 @@ def verify_files(unit, matched_files):
             
             # Check if expected sheet exists
             expected_sheet = result['expectedSheet']
-            sheet_found = expected_sheet in xl.sheet_names if expected_sheet else False
+            expected_candidates = []
+            if isinstance(expected_sheet, (list, tuple)):
+                expected_candidates = list(expected_sheet)
+            elif expected_sheet not in (None, ''):
+                expected_candidates = [expected_sheet]
+
+            sheet_found = False
+            first_found_sheet = None
+            for candidate in expected_candidates:
+                if candidate in xl.sheet_names:
+                    sheet_found = True
+                    first_found_sheet = candidate
+                    break
             
-            if not sheet_found and expected_sheet:
+            if not sheet_found and expected_candidates:
                 result['valid'] = False
-                result['errors'].append(f"Sheet '{expected_sheet}' not found")
+                result['errors'].append(f"Sheet '{expected_candidates[0]}' not found")
             
             # Try to read the sheet (use expected or first available)
-            sheet_to_read = expected_sheet if sheet_found else (xl.sheet_names[0] if xl.sheet_names else None)
+            sheet_to_read = first_found_sheet if sheet_found else (xl.sheet_names[0] if xl.sheet_names else None)
             
             if sheet_to_read:
                 # Read to find columns

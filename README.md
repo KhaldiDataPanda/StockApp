@@ -4,7 +4,7 @@ A modern Electron-based desktop application for stock movement reconciliation ac
 
 ## Features
 
-- 🏭 **Multi-Unit Support**: Fath1, Fath2, Fath5, Larbaa, Oran, Fibre
+- 🏭 **Multi-Unit Support**: Fath1, Fath2, Fath3, Fath5, Larbaa, Oran, Fibre, Mdoukal, Mags
 - 📁 **Drag & Drop**: Easy file upload with automatic keyword matching
 - 🔗 **Smart Matching**: Automatic file-to-atelier linking based on filename keywords
 - 📊 **Results Preview**: Interactive table view of matches and discrepancies
@@ -46,7 +46,7 @@ A modern Electron-based desktop application for stock movement reconciliation ac
 ## Usage
 
 ### Step 1: Select Unit
-Choose the production unit you want to process (Fath1, Fath2, Fath5, Larbaa, Oran, or Fibre).
+Choose the production unit you want to process (Fath1, Fath2, Fath3, Fath5, Larbaa, Oran, Fibre, Mdoukal, or Mags).
 
 ### Step 2: Upload Files
 - **Drag & Drop** your Excel files into the drop zone
