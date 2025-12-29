@@ -5,5 +5,4 @@ dist/
 Thumbs.db
 __pycache__/
 *.pyc
-report_template.html
-report_template.md
+report.html
