@@ -21,8 +21,16 @@ const AppState = {
     fileOverrides: {},     // { atelier: { sheetName, refCol, qtyCol } }
     currentSortColumn: null,
     currentSortDirection: 'asc',
-    searchQuery: ''
+    searchQuery: '',
+    // Report Generation State
+    reportData: {},           // { atelierName: discrepanciesArray }
+    // Verify ± State
+    verifyMode: false,        // true when in "Verify ±" mode
+    oppositeMatches: [],      // Array of matched opposite pairs
+    selectedForElimination: new Set(), // Set of row refs selected for elimination
+    contextMenuRowRef: null   // Reference of row for context menu
 };
+
 
 // Unit configurations with keywords
 const UnitConfigs = {
@@ -135,7 +143,24 @@ const elements = {
     verificationStatus: document.getElementById('verification-status'),
     verificationResults: document.getElementById('verification-results'),
     btnCancelVerification: document.getElementById('btn-cancel-verification'),
-    btnApplyFixes: document.getElementById('btn-apply-fixes')
+    btnApplyFixes: document.getElementById('btn-apply-fixes'),
+    // Report Features
+    reportToolbar: document.getElementById('report-toolbar'),
+    btnGenerateReport: document.getElementById('btn-generate-report'),
+    reportCount: document.getElementById('report-count'),
+    btnClearReport: document.getElementById('btn-clear-report'),
+    btnVerifyOpposite: document.getElementById('btn-verify-opposite'),
+    btnInsertReport: document.getElementById('btn-insert-report'),
+    // Report Modal
+    reportModal: document.getElementById('report-modal'),
+    closeReportModal: document.getElementById('close-report-modal'),
+    reportEditor: document.getElementById('report-editor'),
+    btnCancelReport: document.getElementById('btn-cancel-report'),
+    btnExportMd: document.getElementById('btn-export-md'),
+    btnExportPdf: document.getElementById('btn-export-pdf'),
+    // Context Menu
+    contextMenu: document.getElementById('context-menu'),
+    ctxDeleteRow: document.getElementById('ctx-delete-row')
 };
 
 // ============================================
@@ -180,13 +205,13 @@ function selectUnit(unit) {
     AppState.selectedUnit = unit;
     AppState.ateliers = UnitConfigs[unit].ateliers;
     elements.selectedUnitName.textContent = UnitConfigs[unit].name;
-    
+
     // Reset file state
     resetFileState();
-    
+
     // Render ateliers list
     renderAteliersList();
-    
+
     // Navigate to file upload
     navigateTo('page-file-upload');
 }
@@ -221,12 +246,12 @@ function initDropZone() {
     dropZone.addEventListener('drop', (e) => {
         e.preventDefault();
         dropZone.classList.remove('dragover');
-        
+
         const files = Array.from(e.dataTransfer.files).filter(file => {
             const ext = file.name.split('.').pop().toLowerCase();
             return ['xlsx', 'xls', 'csv'].includes(ext);
         });
-        
+
         handleFiles(files);
     });
 
@@ -242,7 +267,7 @@ function handleFiles(files) {
             path: file.path,
             filename: file.name
         };
-        
+
         // Check if it's a stock file
         if (isStockFile(file.name)) {
             if (AppState.selectedUnit === 'Mags') {
@@ -251,6 +276,14 @@ function handleFiles(files) {
                 AppState.stockFile = fileInfo;
             }
             updateStockFileDisplay();
+
+            // Auto-detect month from stock filename
+            const parsed = parseStockMonthYear(file.name);
+            if (parsed && elements.monthSelect) {
+                AppState.selectedMonth = parsed.month;
+                elements.monthSelect.value = parsed.month;
+                showToast(`Month auto-set to ${getMonthName(parsed.month)}`, 'info');
+            }
         } else {
             // Add to dropped files if not already present
             if (!AppState.droppedFiles.some(f => f.path === file.path)) {
@@ -258,10 +291,17 @@ function handleFiles(files) {
             }
         }
     });
-    
+
     // Match files to ateliers
     matchFilesToAteliers();
     updateUI();
+}
+
+// Helper to get month name
+function getMonthName(monthStr) {
+    const months = ['January', 'February', 'March', 'April', 'May', 'June',
+        'July', 'August', 'September', 'October', 'November', 'December'];
+    return months[parseInt(monthStr, 10) - 1] || monthStr;
 }
 
 function isStockFile(filename) {
@@ -317,18 +357,18 @@ function matchFilesToAteliers() {
     // Reset matching
     AppState.matchedFiles = {};
     AppState.unmatchedFiles = [];
-    
+
     const usedFiles = new Set();
-    
+
     // Try to match each atelier
     AppState.ateliers.forEach(atelier => {
         const keyword = atelier.toLowerCase().trim();
-        
+
         for (const file of AppState.droppedFiles) {
             if (usedFiles.has(file.path)) continue;
-            
+
             const filename = file.filename.toLowerCase();
-            
+
             // Check if keyword matches filename
             if (filename.includes(keyword) || keywordMatch(keyword, filename)) {
                 AppState.matchedFiles[atelier] = file;
@@ -337,7 +377,7 @@ function matchFilesToAteliers() {
             }
         }
     });
-    
+
     // Find unmatched files
     AppState.unmatchedFiles = AppState.droppedFiles.filter(
         file => !usedFiles.has(file.path)
@@ -356,15 +396,15 @@ function keywordMatch(keyword, filename) {
 function renderAteliersList() {
     const container = elements.ateliersList;
     container.innerHTML = '';
-    
+
     AppState.ateliers.forEach(atelier => {
         const matched = AppState.matchedFiles[atelier];
         const isSkipped = AppState.skippedAteliers.has(atelier);
-        
+
         const item = document.createElement('div');
         item.className = `atelier-item${matched ? ' matched' : ''}${isSkipped ? ' skipped' : ''}`;
         item.dataset.atelier = atelier;
-        
+
         item.innerHTML = `
             <div class="atelier-info">
                 <span class="atelier-name">${atelier}</span>
@@ -394,7 +434,7 @@ function renderAteliersList() {
                 </button>
             </div>
         `;
-        
+
         // Add event listeners for buttons
         item.querySelectorAll('.btn-icon').forEach(btn => {
             btn.addEventListener('click', (e) => {
@@ -403,7 +443,7 @@ function renderAteliersList() {
                 handleAtelierAction(atelier, action);
             });
         });
-        
+
         // Enable drop zone for unmatched ateliers
         if (!matched && !isSkipped) {
             item.addEventListener('dragover', (e) => {
@@ -411,15 +451,15 @@ function renderAteliersList() {
                 e.dataTransfer.dropEffect = 'move';
                 item.classList.add('drag-over');
             });
-            
+
             item.addEventListener('dragleave', () => {
                 item.classList.remove('drag-over');
             });
-            
+
             item.addEventListener('drop', (e) => {
                 e.preventDefault();
                 item.classList.remove('drag-over');
-                
+
                 try {
                     const fileData = JSON.parse(e.dataTransfer.getData('application/json'));
                     if (fileData && fileData.path) {
@@ -435,33 +475,33 @@ function renderAteliersList() {
                 }
             });
         }
-        
+
         container.appendChild(item);
     });
 }
 
 function renderUnmatchedFiles() {
     const container = elements.unmatchedList;
-    
+
     // Get unmatched ateliers (ateliers without files)
-    const unmatchedAteliers = AppState.ateliers.filter(a => 
+    const unmatchedAteliers = AppState.ateliers.filter(a =>
         !AppState.matchedFiles[a] && !AppState.skippedAteliers.has(a)
     );
-    
+
     if (AppState.unmatchedFiles.length === 0 && unmatchedAteliers.length === 0) {
         container.innerHTML = '<p class="placeholder-text">All files matched successfully</p>';
         return;
     }
-    
+
     container.innerHTML = '';
-    
+
     // Show unmatched files with ability to drag to ateliers
     if (AppState.unmatchedFiles.length > 0) {
         const filesHeader = document.createElement('div');
         filesHeader.className = 'unmatched-header';
         filesHeader.innerHTML = '<strong>Unmatched Files (drag to atelier):</strong>';
         container.appendChild(filesHeader);
-        
+
         AppState.unmatchedFiles.forEach((file, index) => {
             const item = document.createElement('div');
             item.className = 'file-item draggable';
@@ -480,18 +520,18 @@ function renderUnmatchedFiles() {
                     </svg>
                 </button>
             `;
-            
+
             // Drag start
             item.addEventListener('dragstart', (e) => {
                 e.dataTransfer.setData('application/json', JSON.stringify(file));
                 e.dataTransfer.effectAllowed = 'move';
                 item.classList.add('dragging');
             });
-            
+
             item.addEventListener('dragend', () => {
                 item.classList.remove('dragging');
             });
-            
+
             // Remove button
             item.querySelector('.btn-icon.remove').addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -499,11 +539,11 @@ function renderUnmatchedFiles() {
                 AppState.droppedFiles = AppState.droppedFiles.filter(f => f.path !== file.path);
                 updateUI();
             });
-            
+
             container.appendChild(item);
         });
     }
-    
+
     // Show quick-assign dropdown for unmatched ateliers
     if (unmatchedAteliers.length > 0 && AppState.unmatchedFiles.length > 0) {
         const assignSection = document.createElement('div');
@@ -615,7 +655,7 @@ function updateStockFileDisplay() {
 
         return;
     }
-    
+
     if (AppState.stockFile) {
         container.innerHTML = `
             <div class="file-item" style="background: var(--success-50); cursor: pointer;" id="stock-file-item">
@@ -635,7 +675,7 @@ function updateStockFileDisplay() {
         `;
         elements.stockStatus.textContent = 'Loaded';
         elements.stockStatus.className = 'status-badge success';
-        
+
         // Add change stock handler
         document.getElementById('btn-change-stock').addEventListener('click', async (e) => {
             e.stopPropagation();
@@ -655,7 +695,7 @@ function updateStockFileDisplay() {
         `;
         elements.stockStatus.textContent = 'Not Loaded';
         elements.stockStatus.className = 'status-badge warning';
-        
+
         // Add click handler for stock upload zone
         document.getElementById('stock-upload-zone').addEventListener('click', loadStockFileManually);
     }
@@ -704,7 +744,7 @@ function updateUI() {
 function updateCounts() {
     const matchedCount = Object.keys(AppState.matchedFiles).length;
     const unmatchedCount = AppState.unmatchedFiles.length;
-    
+
     elements.matchedCount.textContent = `${matchedCount} matched`;
     elements.unmatchedCount.textContent = `${unmatchedCount} files`;
 }
@@ -713,7 +753,7 @@ function validateProcessButton() {
     // At least stock file and 1 movement file required
     let hasStock = AppState.stockFile !== null;
     const hasAtLeastOneFile = Object.keys(AppState.matchedFiles).length > 0;
-    
+
     elements.btnProcess.disabled = !(hasStock && hasAtLeastOneFile);
     elements.btnVerify.disabled = !(hasStock && hasAtLeastOneFile);
 }
@@ -734,7 +774,7 @@ async function handleAtelierAction(atelier, action) {
                 updateUI();
             }
             break;
-            
+
         case 'remove':
             const removedFile = AppState.matchedFiles[atelier];
             delete AppState.matchedFiles[atelier];
@@ -744,7 +784,7 @@ async function handleAtelierAction(atelier, action) {
             }
             updateUI();
             break;
-            
+
         case 'skip':
             if (AppState.skippedAteliers.has(atelier)) {
                 AppState.skippedAteliers.delete(atelier);
@@ -765,7 +805,7 @@ async function verifyFiles() {
     elements.verificationStatus.classList.remove('hidden');
     elements.verificationResults.classList.add('hidden');
     elements.btnApplyFixes.disabled = true;
-    
+
     try {
         // Prepare matched files (exclude skipped)
         const filesToVerify = {};
@@ -774,20 +814,20 @@ async function verifyFiles() {
                 filesToVerify[atelier] = file;
             }
         }
-        
+
         // Call Python verifier
         const result = await window.electronAPI.verifyFiles(
             AppState.selectedUnit,
             filesToVerify
         );
-        
+
         if (result && result.success && result.verification) {
             AppState.verificationResults = result.verification;
             renderVerificationResults(result.verification);
         } else {
             throw new Error(result?.error || 'Verification failed');
         }
-        
+
     } catch (error) {
         showToast(`Verification error: ${error}`, 'error');
         closeVerificationModal();
@@ -797,16 +837,16 @@ async function verifyFiles() {
 function renderVerificationResults(verification) {
     elements.verificationStatus.classList.add('hidden');
     elements.verificationResults.classList.remove('hidden');
-    
+
     const container = elements.verificationResults;
     container.innerHTML = '';
-    
+
     const ateliers = Object.keys(verification);
     let hasErrors = false;
-    
+
     // Check if all files are valid
     const allValid = ateliers.every(atelier => verification[atelier].valid);
-    
+
     if (allValid) {
         container.innerHTML = `
             <div class="all-valid-message">
@@ -822,19 +862,19 @@ function renderVerificationResults(verification) {
         elements.btnApplyFixes.textContent = 'Continue to Process';
         return;
     }
-    
+
     elements.btnApplyFixes.textContent = 'Apply & Continue';
-    
+
     ateliers.forEach(atelier => {
         const data = verification[atelier];
         const fileDiv = document.createElement('div');
         fileDiv.className = `verification-file ${data.valid ? 'valid' : 'has-errors'}`;
         fileDiv.dataset.atelier = atelier;
-        
-        const statusIcon = data.valid 
+
+        const statusIcon = data.valid
             ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22,4 12,14.01 9,11.01"/></svg>'
             : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>';
-        
+
         fileDiv.innerHTML = `
             <div class="verification-file-header">
                 <div class="file-info">
@@ -848,14 +888,14 @@ function renderVerificationResults(verification) {
                 <div class="verification-field">
                     <label>Sheet Name:</label>
                     <select class="sheet-select" data-atelier="${atelier}">
-                        ${data.availableSheets.map(sheet => 
-                            `<option value="${sheet}" ${sheet === data.expectedSheet ? 'selected' : ''}>${sheet}</option>`
-                        ).join('')}
+                        ${data.availableSheets.map(sheet =>
+            `<option value="${sheet}" ${sheet === data.expectedSheet ? 'selected' : ''}>${sheet}</option>`
+        ).join('')}
                     </select>
                     <div class="field-status ${data.availableSheets.includes(data.expectedSheet) ? 'valid' : 'error'}">
-                        ${data.availableSheets.includes(data.expectedSheet) 
-                            ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20,6 9,17 4,12"/></svg>'
-                            : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>'}
+                        ${data.availableSheets.includes(data.expectedSheet)
+                ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20,6 9,17 4,12"/></svg>'
+                : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>'}
                     </div>
                 </div>
                 ${!data.availableSheets.includes(data.expectedSheet) ? `
@@ -866,14 +906,14 @@ function renderVerificationResults(verification) {
                     <label>Reference Column:</label>
                     <select class="ref-col-select" data-atelier="${atelier}">
                         <option value="">-- Select Column --</option>
-                        ${data.availableColumns.map(col => 
-                            `<option value="${col}" ${col === data.detectedRefCol ? 'selected' : ''}>${col}</option>`
-                        ).join('')}
+                        ${data.availableColumns.map(col =>
+                    `<option value="${col}" ${col === data.detectedRefCol ? 'selected' : ''}>${col}</option>`
+                ).join('')}
                     </select>
                     <div class="field-status ${data.detectedRefCol ? 'valid' : 'error'}">
-                        ${data.detectedRefCol 
-                            ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20,6 9,17 4,12"/></svg>'
-                            : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>'}
+                        ${data.detectedRefCol
+                ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20,6 9,17 4,12"/></svg>'
+                : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>'}
                     </div>
                 </div>
                 
@@ -881,27 +921,27 @@ function renderVerificationResults(verification) {
                     <label>Quantity Column:</label>
                     <select class="qty-col-select" data-atelier="${atelier}">
                         <option value="">-- Select Column --</option>
-                        ${data.availableColumns.map(col => 
-                            `<option value="${col}" ${col === data.detectedQtyCol ? 'selected' : ''}>${col}</option>`
-                        ).join('')}
+                        ${data.availableColumns.map(col =>
+                    `<option value="${col}" ${col === data.detectedQtyCol ? 'selected' : ''}>${col}</option>`
+                ).join('')}
                     </select>
                     <div class="field-status ${data.detectedQtyCol ? 'valid' : 'error'}">
-                        ${data.detectedQtyCol 
-                            ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20,6 9,17 4,12"/></svg>'
-                            : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>'}
+                        ${data.detectedQtyCol
+                ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20,6 9,17 4,12"/></svg>'
+                : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>'}
                     </div>
                 </div>
             </div>
         `;
-        
+
         container.appendChild(fileDiv);
-        
+
         if (!data.valid) hasErrors = true;
     });
-    
+
     // Enable apply button - user can apply fixes
     elements.btnApplyFixes.disabled = false;
-    
+
     // Add change listeners to update overrides
     container.querySelectorAll('select').forEach(select => {
         select.addEventListener('change', updateOverridesFromUI);
@@ -910,13 +950,13 @@ function renderVerificationResults(verification) {
 
 function updateOverridesFromUI() {
     const container = elements.verificationResults;
-    
+
     container.querySelectorAll('.verification-file').forEach(fileDiv => {
         const atelier = fileDiv.dataset.atelier;
         const sheetSelect = fileDiv.querySelector('.sheet-select');
         const refColSelect = fileDiv.querySelector('.ref-col-select');
         const qtyColSelect = fileDiv.querySelector('.qty-col-select');
-        
+
         AppState.fileOverrides[atelier] = {
             sheetName: sheetSelect?.value || '',
             refCol: refColSelect?.value || '',
@@ -928,10 +968,10 @@ function updateOverridesFromUI() {
 function applyFixesAndProcess() {
     // Collect all overrides from the UI
     updateOverridesFromUI();
-    
+
     // Close modal
     closeVerificationModal();
-    
+
     // Start processing with overrides
     processFiles();
 }
@@ -945,7 +985,7 @@ function closeVerificationModal() {
 // ============================================
 async function processFiles() {
     navigateTo('page-processing');
-    
+
     try {
         // Prepare matched files (exclude skipped)
         const filesToProcess = {};
@@ -954,12 +994,12 @@ async function processFiles() {
                 filesToProcess[atelier] = file;
             }
         }
-        
+
         updateProgress(10, 'Loading files...');
-        
+
         // Prepare overrides if any
         const overrides = Object.keys(AppState.fileOverrides).length > 0 ? AppState.fileOverrides : null;
-        
+
         // Call Python processor
         const stockPayload = (AppState.selectedUnit === 'Mags' && AppState.stockFile)
             ? {
@@ -976,9 +1016,9 @@ async function processFiles() {
             AppState.selectedMonth,
             overrides
         );
-        
+
         updateProgress(100, 'Complete!');
-        
+
         // Extract results from response
         console.log('Raw processor result:', result);
         if (result && result.success && result.results) {
@@ -989,12 +1029,12 @@ async function processFiles() {
             // Assume result is already the results object
             AppState.results = result;
         }
-        
+
         // Short delay then show results
         setTimeout(() => {
             showResults();
         }, 500);
-        
+
     } catch (error) {
         showToast(`Error: ${error}`, 'error');
         navigateTo('page-file-upload');
@@ -1011,27 +1051,27 @@ function updateProgress(percent, status) {
 // ============================================
 function showResults() {
     navigateTo('page-results');
-    
+
     console.log('Results received:', AppState.results);
-    
+
     if (!AppState.results) {
         showToast('No results received from processor', 'error');
         return;
     }
-    
+
     const results = AppState.results;
-    
+
     // Check for errors in results
     for (const [atelier, data] of Object.entries(results)) {
         if (data.error) {
             console.error(`Error in ${atelier}:`, data.error);
         }
     }
-    
+
     // Update summary
     let totalMatches = 0;
     let totalDiscrepancies = 0;
-    
+
     for (const atelier of Object.keys(results)) {
         const matchCount = results[atelier].matches?.length || 0;
         const discCount = results[atelier].discrepancies?.length || 0;
@@ -1039,11 +1079,11 @@ function showResults() {
         totalMatches += matchCount;
         totalDiscrepancies += discCount;
     }
-    
+
     elements.totalMatches.textContent = totalMatches;
     elements.totalDiscrepancies.textContent = totalDiscrepancies;
     elements.totalAteliers.textContent = Object.keys(results).length;
-    
+
     // Populate atelier dropdown
     elements.atelierSelect.innerHTML = '<option value="">Select an atelier...</option>';
     for (const atelier of Object.keys(results)) {
@@ -1054,7 +1094,7 @@ function showResults() {
         option.textContent = `${atelier} (${matchCount} / ${discCount})`;
         elements.atelierSelect.appendChild(option);
     }
-    
+
     // Auto-select first atelier
     if (Object.keys(results).length > 0) {
         elements.atelierSelect.value = Object.keys(results)[0];
@@ -1065,7 +1105,7 @@ function showResults() {
 function renderResultsTable() {
     const atelier = elements.atelierSelect.value;
     const viewType = document.querySelector('.toggle-btn.active').dataset.view;
-    
+
     if (!atelier || !AppState.results || !AppState.results[atelier]) {
         elements.resultsTbody.innerHTML = `
             <tr class="empty-row">
@@ -1074,9 +1114,9 @@ function renderResultsTable() {
         `;
         return;
     }
-    
+
     const atelierData = AppState.results[atelier];
-    
+
     // Check for error
     if (atelierData.error) {
         elements.resultsTbody.innerHTML = `
@@ -1088,9 +1128,9 @@ function renderResultsTable() {
         `;
         return;
     }
-    
+
     let data = [...(atelierData[viewType] || [])];
-    
+
     // Apply search filter
     if (AppState.searchQuery) {
         const query = AppState.searchQuery.toLowerCase();
@@ -1099,13 +1139,13 @@ function renderResultsTable() {
             return ref.includes(query);
         });
     }
-    
+
     // Apply sorting
     if (AppState.currentSortColumn) {
         data.sort((a, b) => {
             let aVal = a[AppState.currentSortColumn];
             let bVal = b[AppState.currentSortColumn];
-            
+
             // Handle numeric values
             if (typeof aVal === 'number' || typeof bVal === 'number') {
                 aVal = parseFloat(aVal) || 0;
@@ -1114,31 +1154,70 @@ function renderResultsTable() {
                 aVal = (aVal || '').toString().toLowerCase();
                 bVal = (bVal || '').toString().toLowerCase();
             }
-            
+
             if (aVal < bVal) return AppState.currentSortDirection === 'asc' ? -1 : 1;
             if (aVal > bVal) return AppState.currentSortDirection === 'asc' ? 1 : -1;
             return 0;
         });
     }
-    
+
     if (data.length === 0) {
-        const message = AppState.searchQuery 
-            ? `No results matching "${AppState.searchQuery}"` 
+        const message = AppState.searchQuery
+            ? `No results matching "${AppState.searchQuery}"`
             : `No ${viewType} found for this atelier`;
         elements.resultsTbody.innerHTML = `
             <tr class="empty-row">
-                <td colspan="4">${message}</td>
+                <td colspan="${AppState.verifyMode ? 5 : 4}">${message}</td>
             </tr>
         `;
         return;
     }
-    
+
+    // Build highlighted refs set for verify mode
+    const highlightedRefs = new Map(); // ref -> 'high' or 'low'
+    if (AppState.verifyMode && viewType === 'discrepancies') {
+        AppState.oppositeMatches.forEach(match => {
+            const level = match.highSimilarity ? 'high' : 'low';
+            highlightedRefs.set(match.ref1, level);
+            highlightedRefs.set(match.ref2, level);
+        });
+    }
+
     elements.resultsTbody.innerHTML = data.map(row => {
         const diff = parseFloat(row.Difference) || 0;
-        const rowClass = diff > 0 ? 'positive' : diff < 0 ? 'negative' : '';
+        let rowClass = diff > 0 ? 'positive' : diff < 0 ? 'negative' : '';
         const refHighlight = AppState.searchQuery ? highlightMatch(row.Ref || '', AppState.searchQuery) : (row.Ref || '');
+
+        // Add highlighting classes in verify mode
+        const highlightLevel = highlightedRefs.get(row.Ref);
+        if (highlightLevel === 'high') {
+            rowClass += ' opposite-high-similarity';
+        } else if (highlightLevel === 'low') {
+            rowClass += ' opposite-low-similarity';
+        }
+
+        // Check if selected for elimination
+        const isSelected = AppState.selectedForElimination.has(row.Ref);
+        if (isSelected) {
+            rowClass += ' marked-for-deletion';
+        }
+
+        // Checkbox column for verify mode
+        let checkboxCell = '';
+        if (AppState.verifyMode && viewType === 'discrepancies') {
+            if (highlightLevel) {
+                const checked = isSelected ? 'checked' : '';
+                checkboxCell = `<td class="checkbox-cell">
+                    <input type="checkbox" ${checked} onchange="toggleRowSelection('${row.Ref.replace(/'/g, "\\'")}')">
+                </td>`;
+            } else {
+                checkboxCell = '<td class="checkbox-cell"></td>';
+            }
+        }
+
         return `
-            <tr class="${rowClass}">
+            <tr class="${rowClass}" data-ref="${row.Ref}" oncontextmenu="showContextMenu(event, '${row.Ref.replace(/'/g, "\\'")}')">
+                ${checkboxCell}
                 <td>${refHighlight}</td>
                 <td>${formatNumber(row.Stock_Qty)}</td>
                 <td>${formatNumber(row.Calc_Mov_Qty)}</td>
@@ -1146,7 +1225,16 @@ function renderResultsTable() {
             </tr>
         `;
     }).join('');
-    
+
+    // Update table header for checkbox column
+    const thead = document.querySelector('.results-table thead tr');
+    const hasCheckboxHeader = thead.querySelector('.checkbox-header');
+    if (AppState.verifyMode && viewType === 'discrepancies' && !hasCheckboxHeader) {
+        thead.insertAdjacentHTML('afterbegin', '<th class="checkbox-header">Select</th>');
+    } else if ((!AppState.verifyMode || viewType !== 'discrepancies') && hasCheckboxHeader) {
+        hasCheckboxHeader.remove();
+    }
+
     // Update sort indicators
     updateSortIndicators();
 }
@@ -1193,22 +1281,22 @@ function formatNumber(val) {
 async function exportResults() {
     const atelier = elements.atelierSelect.value;
     const viewType = document.querySelector('.toggle-btn.active').dataset.view;
-    
+
     if (!atelier || !AppState.results || !AppState.results[atelier]) {
         showToast('Please select an atelier first', 'warning');
         return;
     }
-    
+
     const data = AppState.results[atelier][viewType] || [];
-    
+
     if (data.length === 0) {
         showToast('No data to export', 'warning');
         return;
     }
-    
+
     const defaultName = `${viewType}_${atelier.replace(/\s+/g, '_')}.csv`;
     const filePath = await window.electronAPI.saveFileDialog(defaultName);
-    
+
     if (filePath) {
         try {
             await window.electronAPI.exportCSV(data, filePath);
@@ -1222,22 +1310,22 @@ async function exportResults() {
 async function exportResultsExcel() {
     const atelier = elements.atelierSelect.value;
     const viewType = document.querySelector('.toggle-btn.active').dataset.view;
-    
+
     if (!atelier || !AppState.results || !AppState.results[atelier]) {
         showToast('Please select an atelier first', 'warning');
         return;
     }
-    
+
     const data = AppState.results[atelier][viewType] || [];
-    
+
     if (data.length === 0) {
         showToast('No data to export', 'warning');
         return;
     }
-    
+
     const defaultName = `${viewType}_${atelier.replace(/\s+/g, '_')}.xlsx`;
     const filePath = await window.electronAPI.saveExcelDialog(defaultName);
-    
+
     if (filePath) {
         try {
             await window.electronAPI.exportExcel(data, filePath);
@@ -1264,7 +1352,7 @@ function resetFileState() {
     AppState.currentSortColumn = null;
     AppState.currentSortDirection = 'asc';
     AppState.searchQuery = '';
-    
+
     updateStockFileDisplay();
     elements.fileInput.value = '';
     if (elements.resultsSearch) {
@@ -1281,10 +1369,528 @@ function showToast(message, type = 'info') {
     toast.className = `toast ${type}`;
     toast.textContent = message;
     container.appendChild(toast);
-    
+
     setTimeout(() => {
         toast.remove();
     }, 4000);
+}
+
+// ============================================
+// String Similarity (Levenshtein Distance)
+// ============================================
+function levenshteinSimilarity(str1, str2) {
+    const s1 = (str1 || '').toString().toLowerCase().trim();
+    const s2 = (str2 || '').toString().toLowerCase().trim();
+
+    if (s1 === s2) return 1;
+    if (s1.length === 0 || s2.length === 0) return 0;
+
+    const matrix = [];
+    for (let i = 0; i <= s1.length; i++) {
+        matrix[i] = [i];
+    }
+    for (let j = 0; j <= s2.length; j++) {
+        matrix[0][j] = j;
+    }
+
+    for (let i = 1; i <= s1.length; i++) {
+        for (let j = 1; j <= s2.length; j++) {
+            const cost = s1[i - 1] === s2[j - 1] ? 0 : 1;
+            matrix[i][j] = Math.min(
+                matrix[i - 1][j] + 1,
+                matrix[i][j - 1] + 1,
+                matrix[i - 1][j - 1] + cost
+            );
+        }
+    }
+
+    const maxLen = Math.max(s1.length, s2.length);
+    return 1 - (matrix[s1.length][s2.length] / maxLen);
+}
+
+// ============================================
+// Verify Opposite Discrepancies
+// ============================================
+function findOppositeDiscrepancies() {
+    const atelier = elements.atelierSelect.value;
+    const discrepancies = AppState.results[atelier]?.discrepancies || [];
+    const matches = [];
+
+    for (let i = 0; i < discrepancies.length; i++) {
+        const diff1 = parseFloat(discrepancies[i].Difference);
+        if (diff1 === 0 || isNaN(diff1)) continue;
+
+        for (let j = i + 1; j < discrepancies.length; j++) {
+            const diff2 = parseFloat(discrepancies[j].Difference);
+            if (isNaN(diff2)) continue;
+
+            // Check if values are opposite (sum to ~0)
+            if (Math.abs(diff1 + diff2) < 0.01) {
+                const similarity = levenshteinSimilarity(
+                    discrepancies[i].Ref,
+                    discrepancies[j].Ref
+                );
+
+                matches.push({
+                    ref1: discrepancies[i].Ref,
+                    ref2: discrepancies[j].Ref,
+                    diff1: diff1,
+                    diff2: diff2,
+                    similarity: similarity,
+                    highSimilarity: similarity >= 0.8
+                });
+            }
+        }
+    }
+
+    return matches;
+}
+
+function toggleVerifyMode() {
+    const viewType = document.querySelector('.toggle-btn.active').dataset.view;
+    if (viewType !== 'discrepancies') {
+        showToast('Switch to Discrepancies view first', 'warning');
+        return;
+    }
+
+    if (!AppState.verifyMode) {
+        // Enter verify mode
+        AppState.oppositeMatches = findOppositeDiscrepancies();
+
+        if (AppState.oppositeMatches.length === 0) {
+            showToast('No opposite discrepancies found', 'info');
+            return;
+        }
+
+        AppState.verifyMode = true;
+        AppState.selectedForElimination.clear();
+
+        // Auto-select high similarity matches
+        AppState.oppositeMatches.forEach(match => {
+            if (match.highSimilarity) {
+                AppState.selectedForElimination.add(match.ref1);
+                AppState.selectedForElimination.add(match.ref2);
+            }
+        });
+
+        elements.btnVerifyOpposite.innerHTML = `
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="3,6 5,6 21,6"/>
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+            </svg>
+            Eliminate ±
+        `;
+        elements.btnVerifyOpposite.classList.remove('btn-warning');
+        elements.btnVerifyOpposite.classList.add('btn-danger');
+
+        showToast(`Found ${AppState.oppositeMatches.length} opposite pair(s)`, 'success');
+    } else {
+        // Eliminate selected rows
+        eliminateSelectedOpposites();
+    }
+
+    renderResultsTable();
+}
+
+function eliminateSelectedOpposites() {
+    const atelier = elements.atelierSelect.value;
+    if (!atelier || !AppState.results[atelier]) return;
+
+    const toRemove = AppState.selectedForElimination;
+    if (toRemove.size === 0) {
+        showToast('No items selected for elimination', 'warning');
+        exitVerifyMode();
+        return;
+    }
+
+    // Filter out selected references
+    AppState.results[atelier].discrepancies = AppState.results[atelier].discrepancies.filter(
+        row => !toRemove.has(row.Ref)
+    );
+
+    // Update totals
+    updateResultsSummary();
+
+    showToast(`Eliminated ${toRemove.size} items`, 'success');
+    exitVerifyMode();
+}
+
+function exitVerifyMode() {
+    AppState.verifyMode = false;
+    AppState.oppositeMatches = [];
+    AppState.selectedForElimination.clear();
+
+    elements.btnVerifyOpposite.innerHTML = `
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+        </svg>
+        Verify ±
+    `;
+    elements.btnVerifyOpposite.classList.remove('btn-danger');
+    elements.btnVerifyOpposite.classList.add('btn-warning');
+
+    renderResultsTable();
+}
+
+function toggleRowSelection(ref) {
+    if (AppState.selectedForElimination.has(ref)) {
+        AppState.selectedForElimination.delete(ref);
+    } else {
+        AppState.selectedForElimination.add(ref);
+    }
+    renderResultsTable();
+}
+
+function updateResultsSummary() {
+    if (!AppState.results) return;
+
+    let totalMatches = 0;
+    let totalDiscrepancies = 0;
+
+    for (const atelier of Object.keys(AppState.results)) {
+        totalMatches += AppState.results[atelier].matches?.length || 0;
+        totalDiscrepancies += AppState.results[atelier].discrepancies?.length || 0;
+    }
+
+    elements.totalMatches.textContent = totalMatches;
+    elements.totalDiscrepancies.textContent = totalDiscrepancies;
+}
+
+// ============================================
+// Context Menu for Row Deletion
+// ============================================
+function showContextMenu(event, ref) {
+    event.preventDefault();
+    AppState.contextMenuRowRef = ref;
+
+    const menu = elements.contextMenu;
+    menu.style.left = `${event.clientX}px`;
+    menu.style.top = `${event.clientY}px`;
+    menu.classList.remove('hidden');
+
+    // Close menu when clicking outside
+    document.addEventListener('click', hideContextMenu);
+}
+
+function hideContextMenu() {
+    elements.contextMenu.classList.add('hidden');
+    document.removeEventListener('click', hideContextMenu);
+}
+
+function deleteRowFromContext() {
+    const ref = AppState.contextMenuRowRef;
+    const atelier = elements.atelierSelect.value;
+    const viewType = document.querySelector('.toggle-btn.active').dataset.view;
+
+    if (!ref || !atelier || !AppState.results[atelier]) return;
+
+    // Remove from the current view
+    AppState.results[atelier][viewType] = AppState.results[atelier][viewType].filter(
+        row => row.Ref !== ref
+    );
+
+    updateResultsSummary();
+    renderResultsTable();
+    hideContextMenu();
+    showToast('Row deleted', 'success');
+}
+
+// ============================================
+// Report Generation
+// ============================================
+function addToReport() {
+    const atelier = elements.atelierSelect.value;
+    const viewType = document.querySelector('.toggle-btn.active').dataset.view;
+
+    if (!atelier || viewType !== 'discrepancies') {
+        showToast('Select an atelier and switch to Discrepancies view', 'warning');
+        return;
+    }
+
+    const discrepancies = AppState.results[atelier]?.discrepancies || [];
+    if (discrepancies.length === 0) {
+        showToast('No discrepancies to add', 'warning');
+        return;
+    }
+
+    // Deep copy the discrepancies
+    AppState.reportData[atelier] = JSON.parse(JSON.stringify(discrepancies));
+
+    updateReportCount();
+    showToast(`Added ${atelier} to report`, 'success');
+}
+
+function updateReportCount() {
+    const count = Object.keys(AppState.reportData).length;
+    elements.reportCount.textContent = `${count} atelier${count !== 1 ? 's' : ''} added to report`;
+    elements.btnGenerateReport.disabled = count === 0;
+    elements.btnClearReport.style.display = count > 0 ? 'inline-flex' : 'none';
+}
+
+function clearReport() {
+    AppState.reportData = {};
+    updateReportCount();
+    showToast('Report cleared', 'info');
+}
+
+function getUnitLocation(unit) {
+    const locations = {
+        'Fath1': 'بئر خادم - الفتح 1',
+        'Fath2': 'بئر خادم - الفتح 2',
+        'Fath3': 'بئر خادم - الفتح 3',
+        'Fath5': 'بئر خادم - الفتح 5',
+        'Larbaa': 'الأربعاء',
+        'Oran': 'وهران',
+        'Fibre': 'الفيبر',
+        'Mdoukal': "مضوكل",
+        'Mags': 'المغازن'
+    };
+    return locations[unit] || unit;
+}
+
+function generateReportMarkdown() {
+    const unit = AppState.selectedUnit;
+    const today = new Date();
+    const dateStr = `${today.getFullYear()}/${String(today.getMonth() + 1).padStart(2, '0')}/${String(today.getDate()).padStart(2, '0')}`;
+    const monthNames = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو',
+        'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
+    const selectedMonthName = monthNames[parseInt(AppState.selectedMonth) - 1];
+
+    let markdown = `# SPA ELFATH
+
+**شركة ذات الأسهم الفتح**  
+FABRICATION DE MOUSSE ET DE LITERIE
+
+---
+
+في: ${getUnitLocation(unit)}                                                                                           **${dateStr}**  
+**المديرية العامة**  
+**مصلحة المراقبة**
+
+---
+
+بعد مراقبتنا لملفات المخزون ربطته مع ملف حركة المخزون شهر ${selectedMonthName} ${today.getFullYear()}، وجدنا بعض الاختلافات المبينة في الجداول التالية:
+
+---
+
+`;
+
+    // Add each atelier table
+    for (const [atelierName, discrepancies] of Object.entries(AppState.reportData)) {
+        markdown += `## ${atelierName}\n\n`;
+        markdown += `| REFERENCE | ETAT STOCKS | FICHIER DE MOV | ECARTS |\n`;
+        markdown += `|-----------|-------------|----------------|--------|\n`;
+
+        for (const row of discrepancies) {
+            const stockQty = parseFloat(row.Stock_Qty || 0).toFixed(2);
+            const movQty = parseFloat(row.Calc_Mov_Qty || 0).toFixed(2);
+            const diff = parseFloat(row.Difference || 0).toFixed(2);
+            markdown += `| ${row.Ref} | ${stockQty} | ${movQty} | ${diff} |\n`;
+        }
+        markdown += `\n---\n\n`;
+    }
+
+    return markdown;
+}
+
+function showReportModal() {
+    if (Object.keys(AppState.reportData).length === 0) {
+        showToast('Add at least one atelier to the report first', 'warning');
+        return;
+    }
+
+    const markdown = generateReportMarkdown();
+    elements.reportEditor.value = markdown;
+    elements.reportModal.classList.remove('hidden');
+}
+
+function closeReportModal() {
+    elements.reportModal.classList.add('hidden');
+}
+
+async function exportReportMd() {
+    const content = elements.reportEditor.value;
+    if (!content.trim()) {
+        showToast('Report is empty', 'warning');
+        return;
+    }
+
+    const defaultName = `report_${AppState.selectedUnit}_${new Date().toISOString().split('T')[0]}.md`;
+
+    try {
+        const filePath = await window.electronAPI.saveMarkdownDialog(defaultName);
+        if (filePath) {
+            await window.electronAPI.saveMarkdown(content, filePath);
+            showToast('Markdown exported successfully!', 'success');
+            closeReportModal();
+        }
+    } catch (error) {
+        // Fallback: create a blob and trigger download
+        const blob = new Blob([content], { type: 'text/markdown' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = defaultName;
+        a.click();
+        URL.revokeObjectURL(url);
+        showToast('Markdown downloaded!', 'success');
+        closeReportModal();
+    }
+}
+
+async function exportReportPdf() {
+    if (Object.keys(AppState.reportData).length === 0) {
+        showToast('Report is empty', 'warning');
+        return;
+    }
+
+    try {
+        showToast('Generating PDF...', 'info');
+
+        const today = new Date();
+        const dateStr = `${today.getFullYear()}/${String(today.getMonth() + 1).padStart(2, '0')}/${String(today.getDate()).padStart(2, '0')}`;
+        const monthNames = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو',
+            'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
+        const selectedMonthName = monthNames[parseInt(AppState.selectedMonth) - 1];
+
+        // Build atelier tables HTML
+        let ateliersHtml = '';
+        for (const [atelierName, discrepancies] of Object.entries(AppState.reportData)) {
+            let rowsHtml = '';
+            for (const row of discrepancies) {
+                const stockQty = parseFloat(row.Stock_Qty || 0).toFixed(2);
+                const movQty = parseFloat(row.Calc_Mov_Qty || 0).toFixed(2);
+                const diff = parseFloat(row.Difference || 0).toFixed(2);
+                const diffClass = parseFloat(diff) !== 0 ? 'font-bold text-red-600' : '';
+                rowsHtml += `
+                    <tr class="hover:bg-gray-50">
+                        <td class="border border-gray-400 px-4 py-2 font-medium">${row.Ref}</td>
+                        <td class="border border-gray-400 px-4 py-2 text-right">${stockQty}</td>
+                        <td class="border border-gray-400 px-4 py-2 text-right">${movQty}</td>
+                        <td class="border border-gray-400 px-4 py-2 text-right ${diffClass}">${diff}</td>
+                    </tr>`;
+            }
+
+            ateliersHtml += `
+            <div class="mb-8" dir="ltr">
+                <h3 class="text-lg font-bold mb-3 uppercase border-l-4 border-blue-800 pl-2 latin-text">${atelierName.toUpperCase()} :</h3>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full border-collapse border border-gray-400 text-sm md:text-base latin-text">
+                        <thead class="bg-gray-200">
+                            <tr>
+                                <th class="border border-gray-400 px-4 py-2 text-left">REFERENCE</th>
+                                <th class="border border-gray-400 px-4 py-2 text-right">ETAT STOCKS</th>
+                                <th class="border border-gray-400 px-4 py-2 text-right">FICHIER DE MOV</th>
+                                <th class="border border-gray-400 px-4 py-2 text-right">ECARTS</th>
+                            </tr>
+                        </thead>
+                        <tbody>${rowsHtml}</tbody>
+                    </table>
+                </div>
+            </div>`;
+        }
+
+        // Generate full HTML using the template format
+        const htmlContent = `<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stock Movement Report - El Fath</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&family=Roboto:wght@400;500;700&display=swap');
+        body { font-family: 'Amiri', serif; }
+        .latin-text { font-family: 'Roboto', sans-serif; }
+        @media print {
+            body { -webkit-print-color-adjust: exact; }
+            .no-print { display: none; }
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen p-4 md:p-8 text-gray-900">
+    <div class="max-w-4xl mx-auto bg-white shadow-lg p-8 md:p-12 border border-gray-200">
+        <!-- Header Section -->
+        <div class="flex flex-col md:flex-row justify-between items-start mb-8 border-b-2 border-gray-800 pb-4">
+            <div class="text-right w-full md:w-1/3 mb-4 md:mb-0 order-1 md:order-2">
+                <p class="text-lg font-bold">${getUnitLocation(AppState.selectedUnit)} في : ${dateStr}</p>
+            </div>
+            <div class="text-left w-full md:w-2/3 order-2 md:order-1 latin-text" dir="ltr">
+                <h1 class="text-2xl font-bold uppercase tracking-wider text-blue-900">el.Fath</h1>
+                <h2 class="text-xl font-bold uppercase">SPA ELFATH</h2>
+                <p class="text-sm text-gray-600 font-medium">FABRICATION DE MOUSSE ET DE LITERIE</p>
+            </div>
+        </div>
+
+        <!-- Title Section -->
+        <div class="text-center mb-10">
+            <h1 class="text-3xl font-bold underline decoration-2 underline-offset-8 mb-2">ملف حركة المخزون</h1>
+            <h2 class="text-xl font-semibold mt-4">شركة ذات الأسهم الفتح</h2>
+        </div>
+
+        <!-- Departments -->
+        <div class="flex flex-col items-start gap-2 mb-8 text-xl">
+            <div class="font-bold">المديرية العامة</div>
+            <div class="font-bold">مصلحة المراقبة</div>
+        </div>
+
+        <!-- Body Text -->
+        <div class="mb-8 text-lg leading-relaxed text-justify">
+            <p>
+                وجدنا بعض بعد مراقبتنا لملفات المخزون شهر ${selectedMonthName} ${today.getFullYear()} في وحدة ${getUnitLocation(AppState.selectedUnit)} ومقارنته مع الاختلافات المبينة في الجداول التالية :
+            </p>
+        </div>
+
+        ${ateliersHtml}
+    </div>
+</body>
+</html>`;
+
+        const printWindow = window.open('', '_blank');
+        printWindow.document.write(htmlContent);
+        printWindow.document.close();
+
+        setTimeout(() => {
+            printWindow.print();
+            showToast('Print dialog opened', 'success');
+            closeReportModal();
+        }, 500);
+
+    } catch (error) {
+        showToast(`PDF export failed: ${error}`, 'error');
+    }
+}
+
+function markdownToHtml(markdown) {
+    // Simple markdown to HTML conversion
+    return markdown
+        .replace(/^# (.*$)/gm, '<h1>$1</h1>')
+        .replace(/^## (.*$)/gm, '<h2>$1</h2>')
+        .replace(/^---$/gm, '<hr>')
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\n\n/g, '</p><p>')
+        .replace(/\n/g, '<br>')
+        .replace(/\|(.+)\|/g, (match, content) => {
+            const cells = content.split('|').map(c => c.trim());
+            if (cells.every(c => c.match(/^-+$/))) return ''; // Skip separator row
+            const tag = cells[0].match(/^[A-Z]/) ? 'td' : 'td';
+            return '<tr>' + cells.map(c => `<${tag}>${c}</${tag}>`).join('') + '</tr>';
+        })
+        .replace(/(<tr>.*<\/tr>)+/g, '<table>$&</table>')
+        .replace(/<p><\/p>/g, '')
+        .replace(/^<br>/gm, '');
+}
+
+function updateVerifyButtonVisibility() {
+    const viewType = document.querySelector('.toggle-btn.active').dataset.view;
+    const isDiscrepancies = viewType === 'discrepancies';
+
+    if (elements.btnVerifyOpposite) {
+        elements.btnVerifyOpposite.style.display = isDiscrepancies ? 'inline-flex' : 'none';
+    }
+    if (elements.btnInsertReport) {
+        elements.btnInsertReport.style.display = isDiscrepancies ? 'inline-flex' : 'none';
+    }
 }
 
 // ============================================
@@ -1295,34 +1901,35 @@ function initEventListeners() {
     elements.btnBackToUnits.addEventListener('click', () => {
         navigateTo('page-unit-selection');
     });
-    
+
     elements.btnBackToUpload.addEventListener('click', () => {
         navigateTo('page-file-upload');
     });
-    
+
     // File actions
     elements.btnClearFiles.addEventListener('click', () => {
         resetFileState();
         updateUI();
     });
-    
+
     elements.btnVerify.addEventListener('click', verifyFiles);
     elements.btnProcess.addEventListener('click', processFiles);
-    
+
     // Verification modal
     elements.closeVerificationModal.addEventListener('click', closeVerificationModal);
     elements.btnCancelVerification.addEventListener('click', closeVerificationModal);
     elements.btnApplyFixes.addEventListener('click', applyFixesAndProcess);
     elements.verificationModal.querySelector('.modal-overlay').addEventListener('click', closeVerificationModal);
-    
+
     // Results
     elements.atelierSelect.addEventListener('change', () => {
         AppState.searchQuery = '';
         AppState.currentSortColumn = null;
         if (elements.resultsSearch) elements.resultsSearch.value = '';
+        exitVerifyMode();
         renderResultsTable();
     });
-    
+
     elements.toggleBtns.forEach(btn => {
         btn.addEventListener('click', () => {
             elements.toggleBtns.forEach(b => b.classList.remove('active'));
@@ -1330,10 +1937,12 @@ function initEventListeners() {
             AppState.searchQuery = '';
             AppState.currentSortColumn = null;
             if (elements.resultsSearch) elements.resultsSearch.value = '';
+            exitVerifyMode();
+            updateVerifyButtonVisibility();
             renderResultsTable();
         });
     });
-    
+
     // Search
     if (elements.resultsSearch) {
         elements.resultsSearch.addEventListener('input', (e) => {
@@ -1341,24 +1950,68 @@ function initEventListeners() {
             renderResultsTable();
         });
     }
-    
+
     // Sortable headers
     document.querySelectorAll('.results-table th.sortable').forEach(th => {
         th.addEventListener('click', () => {
             handleSort(th.dataset.column);
         });
     });
-    
+
     elements.btnExport.addEventListener('click', exportResults);
-    
+
     if (elements.btnExportExcel) {
         elements.btnExportExcel.addEventListener('click', exportResultsExcel);
     }
-    
+
     elements.btnNewProcess.addEventListener('click', () => {
         resetFileState();
+        AppState.reportData = {};
+        updateReportCount();
         navigateTo('page-unit-selection');
     });
+
+    // Verify Opposite Button
+    if (elements.btnVerifyOpposite) {
+        elements.btnVerifyOpposite.addEventListener('click', toggleVerifyMode);
+    }
+
+    // Insert Report Button
+    if (elements.btnInsertReport) {
+        elements.btnInsertReport.addEventListener('click', addToReport);
+    }
+
+    // Generate Report Button
+    if (elements.btnGenerateReport) {
+        elements.btnGenerateReport.addEventListener('click', showReportModal);
+    }
+
+    // Clear Report Button
+    if (elements.btnClearReport) {
+        elements.btnClearReport.addEventListener('click', clearReport);
+    }
+
+    // Report Modal
+    if (elements.closeReportModal) {
+        elements.closeReportModal.addEventListener('click', closeReportModal);
+    }
+    if (elements.btnCancelReport) {
+        elements.btnCancelReport.addEventListener('click', closeReportModal);
+    }
+    if (elements.reportModal) {
+        elements.reportModal.querySelector('.modal-overlay').addEventListener('click', closeReportModal);
+    }
+    if (elements.btnExportMd) {
+        elements.btnExportMd.addEventListener('click', exportReportMd);
+    }
+    if (elements.btnExportPdf) {
+        elements.btnExportPdf.addEventListener('click', exportReportPdf);
+    }
+
+    // Context Menu
+    if (elements.ctxDeleteRow) {
+        elements.ctxDeleteRow.addEventListener('click', deleteRowFromContext);
+    }
 }
 
 // ============================================
@@ -1369,3 +2022,29 @@ document.addEventListener('DOMContentLoaded', () => {
     initDropZone();
     initEventListeners();
 });
+
+// Expose functions to global scope for inline event handlers
+window.toggleRowSelection = function (ref) {
+    if (AppState.selectedForElimination.has(ref)) {
+        AppState.selectedForElimination.delete(ref);
+    } else {
+        AppState.selectedForElimination.add(ref);
+    }
+    renderResultsTable();
+};
+
+window.showContextMenu = function (event, ref) {
+    event.preventDefault();
+    event.stopPropagation();
+    AppState.contextMenuRowRef = ref;
+
+    const menu = elements.contextMenu;
+    menu.style.left = `${event.clientX}px`;
+    menu.style.top = `${event.clientY}px`;
+    menu.classList.remove('hidden');
+
+    // Close menu when clicking outside
+    setTimeout(() => {
+        document.addEventListener('click', hideContextMenu);
+    }, 10);
+};

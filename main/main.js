@@ -21,7 +21,7 @@ function createWindow() {
     });
 
     mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
-    
+
     // Open DevTools in development
     if (process.argv.includes('--dev')) {
         mainWindow.webContents.openDevTools();
@@ -90,6 +90,30 @@ ipcMain.handle('save-excel-dialog', async (event, defaultName) => {
     return result.filePath;
 });
 
+// Save Markdown file dialog
+ipcMain.handle('save-markdown-dialog', async (event, defaultName) => {
+    const result = await dialog.showSaveDialog(mainWindow, {
+        defaultPath: defaultName,
+        filters: [
+            { name: 'Markdown Files', extensions: ['md'] }
+        ]
+    });
+    return result.filePath;
+});
+
+// Save Markdown content
+ipcMain.handle('save-markdown', async (event, { content, filePath }) => {
+    const fs = require('fs');
+    return new Promise((resolve, reject) => {
+        try {
+            fs.writeFileSync(filePath, content, 'utf-8');
+            resolve(true);
+        } catch (err) {
+            reject(err.message);
+        }
+    });
+});
+
 // Run Python processor
 ipcMain.handle('run-python', async (event, { script, args }) => {
     return new Promise((resolve, reject) => {
@@ -140,10 +164,10 @@ ipcMain.handle('process-files', async (event, { unit, stockFile, matchedFiles, m
             pythonPath: process.platform === 'win32' ? 'python' : 'python3',
             pythonOptions: ['-u'],
             scriptPath: path.join(__dirname, '../backend'),
-            args: [JSON.stringify({ 
-                action: 'process', 
-                unit, 
-                stockFile, 
+            args: [JSON.stringify({
+                action: 'process',
+                unit,
+                stockFile,
                 matchedFiles,
                 month,
                 overrides
@@ -154,16 +178,16 @@ ipcMain.handle('process-files', async (event, { unit, stockFile, matchedFiles, m
 
         const pyshell = new PythonShell('processor.py', options);
         let results = [];
-        
+
         pyshell.on('message', function (message) {
             console.log('Python output:', message);
             results.push(message);
         });
-        
+
         pyshell.on('stderr', function (stderr) {
             console.log('Python stderr (debug):', stderr);
         });
-        
+
         pyshell.end(function (err, code, signal) {
             if (err) {
                 console.error('Python error:', err);
@@ -191,7 +215,7 @@ ipcMain.handle('export-csv', async (event, { data, filePath }) => {
                 resolve(true);
                 return;
             }
-            
+
             const headers = Object.keys(data[0]);
             const csvContent = [
                 headers.join(','),
@@ -203,7 +227,7 @@ ipcMain.handle('export-csv', async (event, { data, filePath }) => {
                     return val;
                 }).join(','))
             ].join('\n');
-            
+
             fs.writeFileSync(filePath, '\ufeff' + csvContent, 'utf-8'); // BOM for Excel UTF-8
             resolve(true);
         } catch (err) {
@@ -220,9 +244,9 @@ ipcMain.handle('verify-files', async (event, { unit, matchedFiles }) => {
             pythonPath: process.platform === 'win32' ? 'python' : 'python3',
             pythonOptions: ['-u'],
             scriptPath: path.join(__dirname, '../backend'),
-            args: [JSON.stringify({ 
-                action: 'verify', 
-                unit, 
+            args: [JSON.stringify({
+                action: 'verify',
+                unit,
                 matchedFiles
             })]
         };
@@ -231,16 +255,16 @@ ipcMain.handle('verify-files', async (event, { unit, matchedFiles }) => {
 
         const pyshell = new PythonShell('processor.py', options);
         let results = [];
-        
+
         pyshell.on('message', function (message) {
             console.log('Python verify output:', message);
             results.push(message);
         });
-        
+
         pyshell.on('stderr', function (stderr) {
             console.log('Python stderr (debug):', stderr);
         });
-        
+
         pyshell.end(function (err, code, signal) {
             if (err) {
                 console.error('Python error:', err);
@@ -265,9 +289,9 @@ ipcMain.handle('export-excel', async (event, { data, filePath }) => {
             pythonPath: process.platform === 'win32' ? 'python' : 'python3',
             pythonOptions: ['-u'],
             scriptPath: path.join(__dirname, '../backend'),
-            args: [JSON.stringify({ 
-                action: 'export_excel', 
-                data, 
+            args: [JSON.stringify({
+                action: 'export_excel',
+                data,
                 outputPath: filePath
             })]
         };
@@ -276,15 +300,15 @@ ipcMain.handle('export-excel', async (event, { data, filePath }) => {
 
         const pyshell = new PythonShell('processor.py', options);
         let results = [];
-        
+
         pyshell.on('message', function (message) {
             results.push(message);
         });
-        
+
         pyshell.on('stderr', function (stderr) {
             console.log('Python stderr:', stderr);
         });
-        
+
         pyshell.end(function (err, code, signal) {
             if (err) {
                 console.error('Python error:', err);
