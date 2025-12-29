@@ -28,8 +28,38 @@ const AppState = {
     verifyMode: false,        // true when in "Verify ±" mode
     oppositeMatches: [],      // Array of matched opposite pairs
     selectedForElimination: new Set(), // Set of row refs selected for elimination
-    contextMenuRowRef: null   // Reference of row for context menu
+    contextMenuRowRef: null,  // Reference of row for context menu
+    contextMenuAtelier: null,
+    contextMenuViewType: null
 };
+
+function escapeHtml(text) {
+    return (text ?? '').toString()
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function highlightMatchSafe(text, query) {
+    const raw = (text ?? '').toString();
+    if (!query) return escapeHtml(raw);
+    const safeQuery = escapeRegex(query);
+    const regex = new RegExp(safeQuery, 'gi');
+
+    let result = '';
+    let lastIndex = 0;
+    for (const match of raw.matchAll(regex)) {
+        const start = match.index ?? 0;
+        const end = start + match[0].length;
+        result += escapeHtml(raw.slice(lastIndex, start));
+        result += '<mark style="background: var(--warning-200); padding: 0 2px; border-radius: 2px;">' + escapeHtml(raw.slice(start, end)) + '</mark>';
+        lastIndex = end;
+    }
+    result += escapeHtml(raw.slice(lastIndex));
+    return result;
+}
 
 
 // Unit configurations with keywords
@@ -160,6 +190,7 @@ const elements = {
     btnExportPdf: document.getElementById('btn-export-pdf'),
     // Context Menu
     contextMenu: document.getElementById('context-menu'),
+    ctxEditRow: document.getElementById('ctx-edit-row'),
     ctxDeleteRow: document.getElementById('ctx-delete-row')
 };
 
@@ -1186,7 +1217,7 @@ function renderResultsTable() {
     elements.resultsTbody.innerHTML = data.map(row => {
         const diff = parseFloat(row.Difference) || 0;
         let rowClass = diff > 0 ? 'positive' : diff < 0 ? 'negative' : '';
-        const refHighlight = AppState.searchQuery ? highlightMatch(row.Ref || '', AppState.searchQuery) : (row.Ref || '');
+        const refHighlight = highlightMatchSafe(row.Ref || '', AppState.searchQuery);
 
         // Add highlighting classes in verify mode
         const highlightLevel = highlightedRefs.get(row.Ref);
@@ -1208,15 +1239,17 @@ function renderResultsTable() {
             if (highlightLevel) {
                 const checked = isSelected ? 'checked' : '';
                 checkboxCell = `<td class="checkbox-cell">
-                    <input type="checkbox" ${checked} onchange="toggleRowSelection('${row.Ref.replace(/'/g, "\\'")}')">
+                    <input class="row-select-checkbox" type="checkbox" ${checked}>
                 </td>`;
             } else {
                 checkboxCell = '<td class="checkbox-cell"></td>';
             }
         }
 
+        const rowRefAttr = escapeHtml(row.Ref || '');
+
         return `
-            <tr class="${rowClass}" data-ref="${row.Ref}" oncontextmenu="showContextMenu(event, '${row.Ref.replace(/'/g, "\\'")}')">
+            <tr class="${rowClass}" data-ref="${rowRefAttr}">
                 ${checkboxCell}
                 <td>${refHighlight}</td>
                 <td>${formatNumber(row.Stock_Qty)}</td>
@@ -1230,19 +1263,48 @@ function renderResultsTable() {
     const thead = document.querySelector('.results-table thead tr');
     const hasCheckboxHeader = thead.querySelector('.checkbox-header');
     if (AppState.verifyMode && viewType === 'discrepancies' && !hasCheckboxHeader) {
-        thead.insertAdjacentHTML('afterbegin', '<th class="checkbox-header">Select</th>');
+        thead.insertAdjacentHTML('afterbegin', '<th class="checkbox-header"><input type="checkbox" id="verify-select-all" title="Check all"></th>');
     } else if ((!AppState.verifyMode || viewType !== 'discrepancies') && hasCheckboxHeader) {
         hasCheckboxHeader.remove();
     }
+
+    updateVerifySelectAllCheckboxState();
 
     // Update sort indicators
     updateSortIndicators();
 }
 
-function highlightMatch(text, query) {
-    if (!query) return text;
-    const regex = new RegExp(`(${escapeRegex(query)})`, 'gi');
-    return text.toString().replace(regex, '<mark style="background: var(--warning-200); padding: 0 2px; border-radius: 2px;">$1</mark>');
+function updateVerifySelectAllCheckboxState() {
+    const selectAll = document.getElementById('verify-select-all');
+    if (!selectAll) return;
+
+    if (!AppState.verifyMode) {
+        selectAll.checked = false;
+        selectAll.indeterminate = false;
+        return;
+    }
+
+    const all = getAllHighlightedOppositeRefs();
+    if (all.length === 0) {
+        selectAll.checked = false;
+        selectAll.indeterminate = false;
+        selectAll.disabled = true;
+        return;
+    }
+
+    selectAll.disabled = false;
+    const selectedCount = all.reduce((count, ref) => count + (AppState.selectedForElimination.has(ref) ? 1 : 0), 0);
+    selectAll.checked = selectedCount === all.length;
+    selectAll.indeterminate = selectedCount > 0 && selectedCount < all.length;
+}
+
+function getAllHighlightedOppositeRefs() {
+    const uniq = new Set();
+    AppState.oppositeMatches.forEach(m => {
+        if (m?.ref1) uniq.add(m.ref1);
+        if (m?.ref2) uniq.add(m.ref2);
+    });
+    return Array.from(uniq);
 }
 
 function escapeRegex(string) {
@@ -1503,9 +1565,10 @@ function eliminateSelectedOpposites() {
         return;
     }
 
-    // Filter out selected references
+    // Filter out selected references (trim to avoid whitespace mismatches)
+    const toRemoveNormalized = new Set(Array.from(toRemove).map(r => (r ?? '').toString().trim()));
     AppState.results[atelier].discrepancies = AppState.results[atelier].discrepancies.filter(
-        row => !toRemove.has(row.Ref)
+        row => !toRemoveNormalized.has((row.Ref ?? '').toString().trim())
     );
 
     // Update totals
@@ -1559,9 +1622,12 @@ function updateResultsSummary() {
 // ============================================
 // Context Menu for Row Deletion
 // ============================================
-function showContextMenu(event, ref) {
+function showContextMenu(event, ref, ctx) {
     event.preventDefault();
+    event.stopPropagation();
     AppState.contextMenuRowRef = ref;
+    AppState.contextMenuAtelier = ctx?.atelier ?? elements.atelierSelect.value;
+    AppState.contextMenuViewType = ctx?.viewType ?? document.querySelector('.toggle-btn.active')?.dataset?.view;
 
     const menu = elements.contextMenu;
     menu.style.left = `${event.clientX}px`;
@@ -1579,20 +1645,75 @@ function hideContextMenu() {
 
 function deleteRowFromContext() {
     const ref = AppState.contextMenuRowRef;
-    const atelier = elements.atelierSelect.value;
-    const viewType = document.querySelector('.toggle-btn.active').dataset.view;
+    const atelier = AppState.contextMenuAtelier;
+    const viewType = AppState.contextMenuViewType;
 
     if (!ref || !atelier || !AppState.results[atelier]) return;
 
-    // Remove from the current view
+    // Remove from the current view (trim to avoid whitespace mismatches)
+    const refNorm = (ref ?? '').toString().trim();
     AppState.results[atelier][viewType] = AppState.results[atelier][viewType].filter(
-        row => row.Ref !== ref
+        row => (row.Ref ?? '').toString().trim() !== refNorm
     );
 
     updateResultsSummary();
     renderResultsTable();
     hideContextMenu();
     showToast('Row deleted', 'success');
+}
+
+function editRowFromContext() {
+    const oldRef = AppState.contextMenuRowRef;
+    const atelier = AppState.contextMenuAtelier;
+    const viewType = AppState.contextMenuViewType;
+
+    if (!oldRef || !atelier || !viewType || !AppState.results?.[atelier]?.[viewType]) return;
+
+    const newRefRaw = window.prompt('Edit reference:', oldRef);
+    if (newRefRaw === null) {
+        hideContextMenu();
+        return;
+    }
+
+    const newRef = newRefRaw.toString().trim();
+    if (!newRef) {
+        showToast('Reference cannot be empty', 'warning');
+        hideContextMenu();
+        return;
+    }
+
+    const oldRefNorm = oldRef.toString().trim();
+
+    // Update first matching row in the selected table
+    const rows = AppState.results[atelier][viewType];
+    const rowToEdit = rows.find(r => (r.Ref ?? '').toString().trim() === oldRefNorm);
+    if (!rowToEdit) {
+        showToast('Row not found', 'warning');
+        hideContextMenu();
+        return;
+    }
+    rowToEdit.Ref = newRef;
+
+    // Keep verify-mode selection consistent
+    if (AppState.verifyMode) {
+        if (AppState.selectedForElimination.has(oldRef)) {
+            AppState.selectedForElimination.delete(oldRef);
+            AppState.selectedForElimination.add(newRef);
+        }
+        AppState.oppositeMatches = AppState.oppositeMatches.map(m => {
+            if (!m) return m;
+            return {
+                ...m,
+                ref1: m.ref1 === oldRef ? newRef : m.ref1,
+                ref2: m.ref2 === oldRef ? newRef : m.ref2
+            };
+        });
+    }
+
+    updateResultsSummary();
+    renderResultsTable();
+    hideContextMenu();
+    showToast('Reference updated', 'success');
 }
 
 // ============================================
@@ -1958,6 +2079,45 @@ function initEventListeners() {
         });
     });
 
+    // Verify-mode: checkbox changes (row selection)
+    if (elements.resultsTbody) {
+        elements.resultsTbody.addEventListener('change', (e) => {
+            const target = e.target;
+            if (!(target instanceof HTMLInputElement)) return;
+            if (!target.classList.contains('row-select-checkbox')) return;
+            const tr = target.closest('tr');
+            const ref = tr?.dataset?.ref;
+            if (!ref) return;
+            window.toggleRowSelection(ref);
+        });
+
+        // Right-click context menu for any row (matches or discrepancies)
+        elements.resultsTbody.addEventListener('contextmenu', (e) => {
+            const tr = e.target?.closest?.('tr[data-ref]');
+            if (!tr) return;
+            const ref = tr.dataset.ref;
+            const atelier = elements.atelierSelect.value;
+            const viewType = document.querySelector('.toggle-btn.active')?.dataset?.view;
+            showContextMenu(e, ref, { atelier, viewType });
+        });
+    }
+
+    // Verify-mode: select all
+    document.addEventListener('change', (e) => {
+        const target = e.target;
+        if (!(target instanceof HTMLInputElement)) return;
+        if (target.id !== 'verify-select-all') return;
+        if (!AppState.verifyMode) return;
+
+        const all = getAllHighlightedOppositeRefs();
+        if (target.checked) {
+            all.forEach(ref => AppState.selectedForElimination.add(ref));
+        } else {
+            all.forEach(ref => AppState.selectedForElimination.delete(ref));
+        }
+        renderResultsTable();
+    });
+
     elements.btnExport.addEventListener('click', exportResults);
 
     if (elements.btnExportExcel) {
@@ -2012,6 +2172,9 @@ function initEventListeners() {
     if (elements.ctxDeleteRow) {
         elements.ctxDeleteRow.addEventListener('click', deleteRowFromContext);
     }
+    if (elements.ctxEditRow) {
+        elements.ctxEditRow.addEventListener('click', editRowFromContext);
+    }
 }
 
 // ============================================
@@ -2034,17 +2197,5 @@ window.toggleRowSelection = function (ref) {
 };
 
 window.showContextMenu = function (event, ref) {
-    event.preventDefault();
-    event.stopPropagation();
-    AppState.contextMenuRowRef = ref;
-
-    const menu = elements.contextMenu;
-    menu.style.left = `${event.clientX}px`;
-    menu.style.top = `${event.clientY}px`;
-    menu.classList.remove('hidden');
-
-    // Close menu when clicking outside
-    setTimeout(() => {
-        document.addEventListener('click', hideContextMenu);
-    }, 10);
+    showContextMenu(event, ref, { atelier: elements.atelierSelect.value, viewType: document.querySelector('.toggle-btn.active')?.dataset?.view });
 };
